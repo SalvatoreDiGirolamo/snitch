@@ -14,6 +14,10 @@ module snitch_ssr import snitch_ssr_pkg::*; #(
   parameter type tcdm_user_t  = logic,
   parameter type tcdm_req_t   = logic,
   parameter type tcdm_rsp_t   = logic,
+  parameter type isect_slv_req_t = logic,
+  parameter type isect_slv_rsp_t = logic,
+  parameter type isect_mst_req_t = logic,
+  parameter type isect_mst_rsp_t = logic,
   /// Derived parameter *Do not override*
   parameter type addr_t = logic [AddrWidth-1:0],
   parameter type data_t = logic [DataWidth-1:0]
@@ -27,12 +31,19 @@ module snitch_ssr import snitch_ssr_pkg::*; #(
   input  logic [31:0] cfg_wdata_i,
   // Register lanes from switch.
   output data_t       lane_rdata_o,
+  output logic        lane_rzero_o, // Whether the read word is zero (and lane_rdata_o invalid)
+  output logic        lane_rlast_o, // Whether this is the last read word (iff Cfg.IsectMaster)
   input  data_t       lane_wdata_i,
   output logic        lane_valid_o,
   input  logic        lane_ready_i,
   // Ports into memory.
   output tcdm_req_t   mem_req_o,
   input  tcdm_rsp_t   mem_rsp_i,
+  // Interface with intersector
+  output isect_slv_req_t isect_slv_req_o,
+  input  isect_slv_rsp_t isect_slv_rsp_i,
+  output isect_mst_req_t isect_mst_req_o,
+  input  isect_mst_rsp_t isect_mst_rsp_i,
 
   input  addr_t       tcdm_start_address_i
 );
@@ -43,6 +54,7 @@ module snitch_ssr import snitch_ssr_pkg::*; #(
   logic [$clog2(Cfg.DataCredits):0] credit_d, credit_q;
   logic has_credit, credit_take, credit_give;
   logic [Cfg.RptWidth-1:0] rep_max, rep_q, rep_done, rep_enable;
+  logic agen_last, agen_zero;
 
   fifo_v3 #(
     .FALL_THROUGH ( 0           ),
@@ -72,18 +84,28 @@ module snitch_ssr import snitch_ssr_pkg::*; #(
     .DataWidth    ( DataWidth   ),
     .tcdm_req_t   ( tcdm_req_t  ),
     .tcdm_rsp_t   ( tcdm_rsp_t  ),
-    .tcdm_user_t  ( tcdm_user_t )
+    .tcdm_user_t  ( tcdm_user_t ),
+    .isect_slv_req_t ( isect_slv_req_t ),
+    .isect_slv_rsp_t ( isect_slv_rsp_t ),
+    .isect_mst_req_t ( isect_mst_req_t ),
+    .isect_mst_rsp_t ( isect_mst_rsp_t )
   ) i_addr_gen (
     .clk_i,
     .rst_ni,
     .idx_req_o      ( idx_req ),
     .idx_rsp_i      ( idx_rsp ),
+    .isect_slv_req_o,
+    .isect_slv_rsp_i,
+    .isect_mst_req_o,
+    .isect_mst_rsp_i,
     .cfg_word_i,
     .cfg_rdata_o,
     .cfg_wdata_i,
     .cfg_write_i,
     .reg_rep_o      ( rep_max           ),
     .mem_addr_o     ( data_req.q.addr   ),
+    .mem_last_o     ( agen_last         ),
+    .mem_zero_o     ( agen_zero         ),
     .mem_write_o    ( data_req.q.write  ),
     .mem_valid_o    ( mover_valid       ),
     .mem_ready_i    ( data_req_qvalid & data_rsp.q_ready ),
@@ -118,7 +140,6 @@ module snitch_ssr import snitch_ssr_pkg::*; #(
   assign data_req.q.amo = reqrsp_pkg::AMONone;
   assign data_req.q.user = '0;
 
-  assign lane_rdata_o = fifo_out;
   assign data_req.q.data = fifo_out;
   assign data_req.q.strb = '1;
 
@@ -138,24 +159,64 @@ module snitch_ssr import snitch_ssr_pkg::*; #(
       fifo_push = data_rsp.p_valid;
       fifo_in = data_rsp.p.data;
       rep_enable = lane_ready_i & ~fifo_empty;
-      fifo_pop = rep_enable & rep_done;
+      fifo_pop = rep_enable & rep_done & ~lane_rzero_o;
       credit_take = data_req_qvalid & data_rsp.q_ready;
       credit_give = fifo_pop;
     end
   end
 
-  // Credit counter that keeps track of the number of memory requests issued
-  // to ensure that the FIFO does not overfill.
-  always_comb begin
-    credit_d = credit_q;
-    if (credit_take & ~credit_give)
-      credit_d = credit_q - 1;
-    else if (!credit_take & credit_give)
-      credit_d = credit_q + 1;
-  end
-  assign has_credit = (credit_q != '0);
+  if (Cfg.IsectMaster) begin : gen_isect_master
 
-  `FFARN(credit_q, credit_d, Cfg.DataCredits, clk_i, rst_ni)
+    logic meta_full;
+    logic meta_last, meta_zero;
+
+    // A metadata FIFO keeping the zero and last flags for in-flight reads only.
+    // Its full flag is used for request limiting in both reads *and* writes, however.
+    fifo_v3 #(
+      .FALL_THROUGH ( 0               ),
+      .DATA_WIDTH   ( 2               ),
+      .DEPTH        ( Cfg.DataCredits )
+    ) i_fifo_meta (
+      .clk_i,
+      .rst_ni,
+      .testmode_i ( 1'b0       ),
+      .flush_i    ( '0         ),
+      .full_o     ( meta_full  ),
+      .empty_o    (  ),
+      .usage_o    (  ),
+      .data_i     ( {agen_last, agen_zero} ),
+      .push_i     ( credit_take ),
+      .data_o     ( {lane_rlast_o, lane_rzero_o} ),
+      .pop_i      ( credit_give )
+    );
+
+    assign has_credit = ~meta_full;
+
+    // Output is either FIFO data or zero
+    assign lane_rdata_o = fifo_out;
+
+  end else begin : gen_no_isect_master
+
+    // Credit counter that keeps track of the number of memory requests issued
+    // to ensure that the FIFO does not overfill.
+    always_comb begin
+      credit_d = credit_q;
+      if (credit_take & ~credit_give)
+        credit_d = credit_q - 1;
+      else if (!credit_take & credit_give)
+        credit_d = credit_q + 1;
+    end
+    assign has_credit = (credit_q != '0);
+
+    `FFARN(credit_q, credit_d, Cfg.DataCredits, clk_i, rst_ni)
+
+    assign lane_rdata_o = fifo_out;
+
+    // If not an intersection master: no zero words are emitted, no last flag is provided
+    assign lane_rzero_o = 1'b0;
+    assign lane_rlast_o = 1'b0;
+
+  end
 
   // Repetition counter.
   `FFLARNC(rep_q, rep_q + 1, rep_enable, rep_enable & rep_done, '0, clk_i, rst_ni)

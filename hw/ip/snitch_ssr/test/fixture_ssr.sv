@@ -6,6 +6,7 @@
 
 `include "tcdm_interface/typedef.svh"
 `include "tcdm_interface/assign.svh"
+`include "snitch_ssr/typedef.svh"
 
 module fixture_ssr import snitch_ssr_pkg::*; #(
   parameter int unsigned  AddrWidth = 0,
@@ -39,6 +40,9 @@ module fixture_ssr import snitch_ssr_pkg::*; #(
   typedef logic [DataWidth/8-1:0] strb_t;
   typedef logic                   user_t;
   `TCDM_TYPEDEF_ALL(tcdm, addr_t, data_t, strb_t, user_t);
+
+  // Intersector types
+  `SSR_ISECT_TYPEDEF_ALL(isect, logic [Cfg.IndexWidth-1:0])
 
   // Configuration written through proper registers
   typedef struct packed {
@@ -123,7 +127,11 @@ module fixture_ssr import snitch_ssr_pkg::*; #(
     .DataWidth    ( DataWidth   ),
     .tcdm_user_t  ( user_t      ),
     .tcdm_req_t   ( tcdm_req_t  ),
-    .tcdm_rsp_t   ( tcdm_rsp_t  )
+    .tcdm_rsp_t   ( tcdm_rsp_t  ),
+    .isect_slv_req_t  ( isect_slv_req_t ),
+    .isect_slv_rsp_t  ( isect_slv_rsp_t ),
+    .isect_mst_req_t  ( isect_mst_req_t ),
+    .isect_mst_rsp_t  ( isect_mst_rsp_t )
   ) i_snitch_ssr (
     .clk_i          ( clk       ),
     .rst_ni         ( rst_n     ),
@@ -132,11 +140,19 @@ module fixture_ssr import snitch_ssr_pkg::*; #(
     .cfg_rdata_o,
     .cfg_wdata_i,
     .lane_rdata_o,
+    // TODO: test metadata outputs
+    .lane_rzero_o   (  ),
+    .lane_rlast_o   (  ),
     .lane_wdata_i,
     .lane_valid_o,
     .lane_ready_i,
     .mem_req_o,
     .mem_rsp_i,
+    // TODO: test intersection
+    .isect_mst_req_o  (     ),
+    .isect_slv_req_o  (     ),
+    .isect_mst_rsp_i  ( '0  ),
+    .isect_slv_rsp_i  ( '0  ),
     .tcdm_start_address_i
   );
 

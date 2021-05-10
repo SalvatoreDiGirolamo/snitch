@@ -7,6 +7,7 @@
 // Indirection datapath for the SSR address generator.
 
 `include "common_cells/registers.svh"
+`include "common_cells/assertions.svh"
 
 module snitch_ssr_indirector import snitch_ssr_pkg::*; #(
   parameter ssr_cfg_t Cfg = '0,
@@ -15,6 +16,10 @@ module snitch_ssr_indirector import snitch_ssr_pkg::*; #(
   parameter type tcdm_req_t   = logic,
   parameter type tcdm_rsp_t   = logic,
   parameter type tcdm_user_t  = logic,
+  parameter type isect_slv_req_t = logic,
+  parameter type isect_slv_rsp_t = logic,
+  parameter type isect_mst_req_t = logic,
+  parameter type isect_mst_rsp_t = logic,
   /// Derived parameters *Do not override*
   parameter int unsigned BytecntWidth = $clog2(DataWidth/8),
   parameter type addr_t     = logic [AddrWidth-1:0],
@@ -30,11 +35,18 @@ module snitch_ssr_indirector import snitch_ssr_pkg::*; #(
   // Index fetch ports
   output tcdm_req_t idx_req_o,
   input  tcdm_rsp_t idx_rsp_i,
+  // With intersector interfaces
+  output isect_slv_req_t isect_slv_req_o,
+  input  isect_slv_rsp_t isect_slv_rsp_i,
+  output isect_mst_req_t isect_mst_req_o,
+  input  isect_mst_rsp_t isect_mst_rsp_i,
   // From config interface
   input  bytecnt_t  cfg_offs_next_i,
   input  logic      cfg_done_i,
-  // From config registers
   input  logic      cfg_indir_i,
+  input  logic      cfg_isect_slv_i,    // Whether to consume indices from intersector
+  input  logic      cfg_isect_mst_i,    // Whether to emit indices to intersector
+  input  logic      cfg_isect_merge_i,  // Whether to form union instead of intersection
   input  idx_size_t cfg_size_i,
   input  pointer_t  cfg_base_i,
   input  shift_t    cfg_shift_i,
@@ -47,6 +59,7 @@ module snitch_ssr_indirector import snitch_ssr_pkg::*; #(
   // To address generator output (downstream)
   output pointer_t  mem_pointer_o,
   output logic      mem_last_o,
+  output logic      mem_zero_o,         // Whether to inject a zero value; overrules pointer!
   output logic      mem_valid_o,
   input  logic      mem_ready_i,
   // TCDM base
@@ -69,9 +82,17 @@ module snitch_ssr_indirector import snitch_ssr_pkg::*; #(
   bytecnt_t last_idx_byteoffs;
 
   // Index serializer
-  data_t    idx_ser_mask;
-  index_t   idx_ser_out;
-  pointer_t idx_ser_offs;
+  data_t  idx_ser_mask;
+  index_t idx_ser_out;
+  logic   idx_ser_last;
+  logic   idx_ser_valid;
+  logic   idx_ser_ready;
+
+  // Post-intersector slave stream
+  index_t isect_slv_idx;
+  logic   isect_slv_last;
+  logic   isect_slv_valid;
+  logic   isect_slv_ready;
 
   // Index serializer counter
   logic     idx_bytecnt_ena;
@@ -130,14 +151,53 @@ module snitch_ssr_indirector import snitch_ssr_pkg::*; #(
   assign {natit_extraword_o, last_idx_byteoffs} = first_idx_byteoffs + natit_boundoffs_i;
 
   // Serialize indices: shift left by current byte offset, then mask out index of given size.
-  assign idx_ser_mask = ~({DataWidth{1'b1}} << (8 << cfg_size_i));
-  assign idx_ser_out  = (idx_fifo_out >> (BytecntWidth+3)'(idx_bytecnt_q << 3)) & idx_ser_mask;
-  assign idx_ser_offs = pointer_t'(idx_ser_out) << BytecntWidth;
+  assign idx_ser_mask   = ~({DataWidth{1'b1}} << (8 << cfg_size_i));
+  assign idx_ser_out    = (idx_fifo_out >> (BytecntWidth+3)'(idx_bytecnt_q << 3)) & idx_ser_mask;
+  assign idx_ser_last   = last_word & idx_fifo_pop;
+  assign idx_ser_valid  = ~idx_fifo_empty;
+
+  // Ensure intersection modes match capabilities
+  `ASSERT_NEVER(no_isect_slave_cfg, ~Cfg.IsectSlave & cfg_isect_slv_i, clk_i, !rst_ni)
+  `ASSERT_NEVER(no_isect_master_cfg, ~Cfg.IsectMaster & cfg_isect_slv_i, clk_i, !rst_ni)
+
+  // Output index depends on whether we consume from serializer or intersected stream
+  always_comb begin
+    if (Cfg.IsectSlave & cfg_isect_slv_i) begin
+      isect_slv_req_o = '{ena: cfg_isect_slv_i, ready: isect_slv_ready};
+      idx_ser_ready   = 1'b0;
+      isect_slv_idx   = isect_slv_rsp_i.idx;
+      isect_slv_last  = isect_slv_rsp_i.last;
+      isect_slv_valid = isect_slv_rsp_i.valid;
+    end else begin
+      isect_slv_req_o = '0;
+      idx_ser_ready   = isect_slv_ready;
+      isect_slv_idx   = idx_ser_out;
+      isect_slv_last  = idx_ser_last;
+      isect_slv_valid = idx_ser_valid;
+    end
+  end
+
+  // Output validity and zero flag depend on whether we emit indices to intersect
+  // TODO: Check if switching power of isect_mst_req_o is worth the masking area / path delay
+  always_comb begin
+    if (Cfg.IsectMaster & cfg_isect_mst_i) begin
+      isect_mst_req_o = '{merge: cfg_isect_merge_i, idx: idx_ser_out,
+                          last: idx_ser_last, valid: idx_ser_valid & mem_ready_i};
+      isect_slv_ready = isect_mst_rsp_i.ready;
+      mem_zero_o      = isect_mst_rsp_i.zero;
+      mem_last_o      = isect_mst_rsp_i.last;
+      mem_valid_o     = isect_mst_req_o.valid & isect_mst_rsp_i.ready;
+    end else begin
+      isect_mst_req_o = '0;
+      isect_slv_ready = mem_ready_i;
+      mem_zero_o      = 1'b0;
+      mem_last_o      = isect_slv_last;
+      mem_valid_o     = isect_slv_valid;
+    end
+  end
 
   // Shift and emit indices
-  assign mem_pointer_o = cfg_base_i + (idx_ser_offs << cfg_shift_i);
-  assign mem_last_o    = last_word & idx_fifo_pop;
-  assign mem_valid_o   = ~idx_fifo_empty;
+  assign mem_pointer_o = cfg_base_i + ((pointer_t'(isect_slv_idx) << BytecntWidth) << cfg_shift_i);
 
   // Serializer counter advancing the byte offset
   always_comb begin
@@ -156,6 +216,6 @@ module snitch_ssr_indirector import snitch_ssr_pkg::*; #(
       (last_word ? idx_bytecnt_q == last_idx_byteoffs : idx_bytecnt_next == '0);
 
   // Serialize whenever words are available and downstream ready
-  assign idx_bytecnt_ena  = ~idx_fifo_empty & mem_ready_i;
+  assign idx_bytecnt_ena  = ~idx_fifo_empty & idx_ser_ready;
 
 endmodule

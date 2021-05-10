@@ -14,6 +14,10 @@ module snitch_ssr_addr_gen import snitch_ssr_pkg::*; #(
   parameter type tcdm_req_t   = logic,
   parameter type tcdm_rsp_t   = logic,
   parameter type tcdm_user_t  = logic,
+  parameter type isect_slv_req_t = logic,
+  parameter type isect_slv_rsp_t = logic,
+  parameter type isect_mst_req_t = logic,
+  parameter type isect_mst_rsp_t = logic,
   /// Derived parameters *Do not override*
   parameter int unsigned BytecntWidth = $clog2(DataWidth/8),
   parameter type addr_t     = logic [AddrWidth-1:0],
@@ -30,6 +34,12 @@ module snitch_ssr_addr_gen import snitch_ssr_pkg::*; #(
   output tcdm_req_t   idx_req_o,
   input  tcdm_rsp_t   idx_rsp_i,
 
+  // Interface with intersector
+  output isect_slv_req_t isect_slv_req_o,
+  input  isect_slv_rsp_t isect_slv_rsp_i,
+  output isect_mst_req_t isect_mst_req_o,
+  input  isect_mst_rsp_t isect_mst_rsp_i,
+
   input  logic [4:0]  cfg_word_i,
   output logic [31:0] cfg_rdata_o,
   input  logic [31:0] cfg_wdata_i,
@@ -38,6 +48,8 @@ module snitch_ssr_addr_gen import snitch_ssr_pkg::*; #(
   output logic [Cfg.RptWidth-1:0] reg_rep_o,
 
   output addr_t       mem_addr_o,
+  output logic        mem_last_o,
+  output logic        mem_zero_o,
   output logic        mem_write_o,
   output logic        mem_valid_o,
   input  logic        mem_ready_i,
@@ -95,7 +107,6 @@ module snitch_ssr_addr_gen import snitch_ssr_pkg::*; #(
   // Signals interfacing with indirection datapath
   indir_read_map_t indir_read_map;
   pointer_t mem_pointer;
-  logic mem_last;
 
   if (Cfg.Indirection) begin : gen_indirection
 
@@ -103,6 +114,7 @@ module snitch_ssr_addr_gen import snitch_ssr_pkg::*; #(
     typedef struct packed {
       pointer_t pointer;
       logic     last;
+      logic     zero;
     } out_spill_t;
 
     // Interface between natural iterator 0 and indirector
@@ -118,6 +130,7 @@ module snitch_ssr_addr_gen import snitch_ssr_pkg::*; #(
     logic indir_valid;
     pointer_t indir_pointer;
     logic indir_last;
+    logic indir_zero;
 
     // Indirector configuration registers
     logic [Cfg.ShiftWidth-1:0]    idx_shift_q, idx_shift_sd, idx_shift_sq;
@@ -173,15 +186,26 @@ module snitch_ssr_addr_gen import snitch_ssr_pkg::*; #(
       .DataWidth    ( DataWidth   ),
       .tcdm_req_t   ( tcdm_req_t  ),
       .tcdm_rsp_t   ( tcdm_rsp_t  ),
-      .tcdm_user_t  ( tcdm_user_t )
+      .tcdm_user_t  ( tcdm_user_t ),
+      .isect_slv_req_t ( isect_slv_req_t ),
+      .isect_slv_rsp_t ( isect_slv_rsp_t ),
+      .isect_mst_req_t ( isect_mst_req_t ),
+      .isect_mst_rsp_t ( isect_mst_rsp_t )
     ) i_snitch_ssr_indirector (
       .clk_i,
       .rst_ni,
       .idx_req_o,
       .idx_rsp_i,
+      .isect_slv_req_o,
+      .isect_slv_rsp_i,
+      .isect_mst_req_o,
+      .isect_mst_rsp_i,
       .cfg_done_i          ( config_q.done    ),
       .cfg_offs_next_i     ( pointer_sd[BytecntWidth-1:0] ),
       .cfg_indir_i         ( config_q.indir   ),
+      .cfg_isect_slv_i     ( config_q.indir & (config_q.dims == 2'b01)  ),
+      .cfg_isect_mst_i     ( config_q.indir & config_q.dims[1]          ),
+      .cfg_isect_merge_i   ( config_q.indir & (config_q.dims == 2'b11)  ),
       .cfg_size_i          ( idx_size_q       ),
       .cfg_base_i          ( idx_base_q       ),
       .cfg_shift_i         ( idx_shift_q      ),
@@ -191,6 +215,7 @@ module snitch_ssr_addr_gen import snitch_ssr_pkg::*; #(
       .natit_boundoffs_i   ( natit_boundoffs  ),
       .natit_extraword_o   ( natit_extraword  ),
       .mem_pointer_o       ( indir_pointer    ),
+      .mem_zero_o          ( indir_zero       ),
       .mem_last_o          ( indir_last       ),
       .mem_valid_o         ( indir_valid      ),
       .mem_ready_i         ( spill_in_ready   ),
@@ -202,11 +227,11 @@ module snitch_ssr_addr_gen import snitch_ssr_pkg::*; #(
     always_comb begin
       if (config_q.indir) begin
         spill_in_valid  = indir_valid;
-        spill_in_data   = {indir_pointer, indir_last};
+        spill_in_data   = {indir_pointer, indir_last, indir_zero};
         enable          = ~natit_done & natit_ready;
       end else begin
         spill_in_valid  = ~natit_done;
-        spill_in_data   = {pointer_q, done};
+        spill_in_data   = {pointer_q, done, 1'b0};
         enable          = ~natit_done & spill_in_ready;
       end
     end
@@ -224,10 +249,10 @@ module snitch_ssr_addr_gen import snitch_ssr_pkg::*; #(
         .data_i  ( spill_in_data  ),
         .valid_o ( mem_valid_o    ),
         .ready_i ( mem_ready_i    ),
-        .data_o  ( {mem_pointer, mem_last} )
+        .data_o  ( {mem_pointer, mem_last_o, mem_zero_o} )
       );
     end else begin : gen_no_indir_out_spill
-      assign {mem_pointer, mem_last} = spill_in_data;
+      assign {mem_pointer, mem_last_o, mem_zero_o} = spill_in_data;
       assign mem_valid_o    = spill_in_valid;
       assign spill_in_ready = mem_ready_i;
     end
@@ -239,7 +264,8 @@ module snitch_ssr_addr_gen import snitch_ssr_pkg::*; #(
     assign enable = ~config_q.done & mem_valid_o & mem_ready_i;
     assign mem_valid_o = ~config_q.done;
     assign mem_pointer = pointer_q;
-    assign mem_last    = done;
+    assign mem_last_o  = done;
+    assign mem_zero_o  = 1'b0;
 
     // Tie off the index request port as no indirection
     assign idx_req_o = '0;
@@ -282,7 +308,7 @@ module snitch_ssr_addr_gen import snitch_ssr_pkg::*; #(
 
     // Indicate last iteration (loops > 0); base loop handled differently in indirection
     if (i > 0) begin : gen_loop_last_upper
-      assign loop_last[i] = (index_q[i] == bound_q[i] || config_q.dims < i);
+      assign loop_last[i] = config_q.indir ? 1'b1: (index_q[i] == bound_q[i] || config_q.dims < i);
     end
   end
 
@@ -353,7 +379,7 @@ module snitch_ssr_addr_gen import snitch_ssr_pkg::*; #(
       if (enable)
         pointer_qn = pointer_q + selected_stride;
       if (mem_ready_i & mem_valid_o)
-        config_qn.done = mem_last;
+        config_qn.done = mem_last_o;
     end
   end
 

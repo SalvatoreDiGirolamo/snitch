@@ -28,7 +28,7 @@ module snitch_cluster_peripheral
   input  addr_t                      tcdm_start_address_i,
   input  addr_t                      tcdm_end_address_i,
   output logic [NrCores-1:0]         wake_up_o,
-  input  logic [9:0]                 cluster_hart_base_id_i,
+  input  logic [31:0]                cluster_hart_base_id_i,
   input  core_events_t [NrCores-1:0] core_events_i,
   input  tcdm_events_t               tcdm_events_i
 );

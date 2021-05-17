@@ -114,8 +114,15 @@ module snitch_cc #(
   output axi_dma_pkg::dma_perf_t     axi_dma_perf_o,
   // Core event strobes
   output snitch_pkg::core_events_t   core_events_o,
+  // TCDM map
   input  addr_t                      tcdm_addr_base_i,
-  input  addr_t                      tcdm_addr_mask_i
+  input  addr_t                      tcdm_addr_mask_i,
+  // HPU driver map
+  input  addr_t                      hpu_driver_addr_base_i,
+  input  addr_t                      hpu_driver_addr_mask_i,
+  // HPU driver data
+  output dreq_t                      data_hpu_driver_req_o,
+  input  drsp_t                      data_hpu_driver_rsp_i
 );
 
   localparam bit FPEn = RVF | RVD | XF16 | XF16ALT | XF8 | XFVEC | XF16 | XF16ALT | XF8;
@@ -511,11 +518,11 @@ module snitch_cc #(
   // Decide whether to go to SoC or TCDM
   dreq_t data_tcdm_req;
   drsp_t data_tcdm_rsp;
-  localparam int unsigned SelectWidth = cf_math_pkg::idx_width(2);
+  localparam int unsigned SelectWidth = cf_math_pkg::idx_width(3);
   typedef logic [SelectWidth-1:0] select_t;
   select_t slave_select;
   reqrsp_demux #(
-    .NrPorts (2),
+    .NrPorts (3),
     .req_t (dreq_t),
     .rsp_t (drsp_t),
     // TODO(zarubaf): Make a parameter.
@@ -526,8 +533,8 @@ module snitch_cc #(
     .slv_select_i (slave_select),
     .slv_req_i (merged_dreq),
     .slv_rsp_o (merged_drsp),
-    .mst_req_o ({data_tcdm_req, data_req_o}),
-    .mst_rsp_i ({data_tcdm_rsp, data_rsp_i})
+    .mst_req_o ({data_hpu_driver_req_o, data_tcdm_req, data_req_o}),
+    .mst_rsp_i ({data_hpu_driver_rsp_i, data_tcdm_rsp, data_rsp_i})
   );
 
   typedef struct packed {
@@ -536,16 +543,21 @@ module snitch_cc #(
     logic [AddrWidth-1:0] mask;
   } reqrsp_rule_t;
 
-  reqrsp_rule_t addr_map;
-  assign addr_map = '{
+  reqrsp_rule_t [1:0] addr_map;
+  assign addr_map[0] = '{
     idx: 1,
     base: tcdm_addr_base_i,
     mask: tcdm_addr_mask_i
   };
+  assign addr_map[1] = '{
+    idx: 2,
+    base: hpu_driver_addr_base_i,
+    mask: hpu_driver_addr_mask_i
+  };
 
   addr_decode_napot #(
-    .NoIndices (2),
-    .NoRules (1),
+    .NoIndices (3),
+    .NoRules (2),
     .addr_t (logic [AddrWidth-1:0]),
     .rule_t (reqrsp_rule_t)
   ) i_addr_decode_napot (

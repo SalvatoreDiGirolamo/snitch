@@ -148,6 +148,31 @@ module snitch_cluster
   parameter type         wide_out_resp_t   = logic,
   parameter type         wide_in_req_t     = logic,
   parameter type         wide_in_resp_t    = logic,
+  /// # PsPIN
+  // Total number of HERs per cluster (in execution + buffered)
+  parameter int unsigned HERCount = 4,
+  // Size of the packet buffer in L1 (in bytes)
+  parameter int unsigned L1PktBuffSize = 0,
+  // Size of the HPU driver address space
+  parameter int unsigned HPUDriverMemSize = 0,
+  /// Number of in-flight commands each HPU can have
+  parameter int unsigned NumCmds = 4,
+  /// Cluster ID width
+  parameter int unsigned ClusterIdWidth = 16,
+  /// Core ID witdh
+  parameter int unsigned CoreIdWidth = 16,
+  /// Type for the task delivered to the cluster
+  parameter type handler_task_t = logic,
+  /// Type for the task delivered to the HPU
+  parameter type hpu_handler_task_t = logic,
+  /// Type for the feedback descriptor to the cluster local scheduler
+  parameter type task_feedback_descr_t = logic,
+  /// Type for the feedback descriptor to the scheduler
+  parameter type feedback_descr_t = logic,
+  /// Type for the PsPIN command request
+  parameter type cmd_req_t = logic,
+  /// Type for the PsPIN command response
+  parameter type cmd_resp_t = logic,
   // Memory latency parameter. Most of the memories have a read latency of 1. In
   // case you have memory macros which are pipelined you want to adjust this
   // value here. This only applies to the TCDM. The instruction cache macros will break!
@@ -196,7 +221,28 @@ module snitch_cluster
   input  wide_out_resp_t                wide_out_resp_i,
   /// AXI DMA cluster in-port.
   input  wide_in_req_t                  wide_in_req_i,
-  output wide_in_resp_t                 wide_in_resp_o
+  output wide_in_resp_t                 wide_in_resp_o,
+  /// Task from scheduler
+  input  logic                          task_valid_i,
+  output logic                          task_ready_o,
+  input  handler_task_t                 task_descr_i,
+  /// Feedback to scheduler
+  output logic                          feedback_valid_o,
+  input  logic                          feedback_ready_i,
+  output feedback_descr_t               feedback_o,
+  /// Flag signaling that the cluster is ready to accept tasks
+  output logic                          cluster_active_o,
+  /// Command request
+  input  logic                          cmd_ready_i,
+  output logic                          cmd_valid_o,
+  output cmd_req_t                      cmd_o,
+  /// Command response
+  input  logic                          cmd_resp_valid_i,
+  input  cmd_resp_t                     cmd_resp_i,
+  /// Base address of the HPU driver
+  input  logic [PhysicalAddrWidth-1:0]  hpu_driver_base_addr_i,
+  /// Base address of the packet buffer in L1
+  input  logic [PhysicalAddrWidth-1:0]  pkt_buff_start_addr_i
 );
   // ---------
   // Constants
@@ -221,6 +267,7 @@ module snitch_cluster
   localparam int unsigned NrTCDMPortsCores = get_tcdm_port_offs(NrCores);
   localparam int unsigned NumTCDMIn = NrTCDMPortsCores + 1;
   localparam logic [PhysicalAddrWidth-1:0] TCDMMask = ~(TCDMSize-1);
+  localparam logic [PhysicalAddrWidth-1:0] HPUDriverMemMask = ~(HPUDriverMemSize-1);
 
   // Core Requests, SoC Request, PTW, `n` instruction caches.
   localparam int unsigned NrMasters = 3 + NrHives;
@@ -299,6 +346,16 @@ module snitch_cluster
     logic [CoreIDWidth-1:0] core_id;
     bit                     is_core;
   } tcdm_user_t;
+
+  // DMA transfer descriptor (cluster scheduler -> DMA engine)
+  typedef struct packed {
+    logic [31:0] num_bytes;
+    logic [PhysicalAddrWidth-1:0] dst_addr;
+    logic [PhysicalAddrWidth-1:0] src_addr;
+    logic deburst;
+    logic decouple;
+    logic serialize;
+  } internal_dma_xfer_t;
 
   // Regbus peripherals.
   `AXI_TYPEDEF_ALL(axi_mst, addr_t, id_mst_t, data_t, strb_t, user_t)
@@ -696,6 +753,22 @@ module snitch_cluster
   hive_req_t [NrCores-1:0] hive_req;
   hive_rsp_t [NrCores-1:0] hive_rsp;
 
+  // cluster_scheduler -> hpu_drivers
+  logic [NrCores-1:0]                 hpu_task_valid;
+  logic [NrCores-1:0]                 hpu_task_ready;
+  hpu_handler_task_t                  hpu_task;
+
+  // hpu_drivers -> cluster_scheduler
+  logic [NrCores-1:0]                 hpu_feedback_valid;
+  logic [NrCores-1:0]                 hpu_feedback_ready;
+  task_feedback_descr_t [NrCores-1:0] hpu_feedback;
+  logic [NrCores-1:0]                 hpu_active;
+
+  // hpu_drivers -> commands
+  logic [NrCores-1:0]                 core_cmd_ready;
+  logic [NrCores-1:0]                 core_cmd_valid;
+  cmd_req_t [NrCores-1:0]             core_cmd;
+
   for (genvar i = 0; i < NrCores; i++) begin : gen_core
     localparam int unsigned TcdmPorts = get_tcdm_ports(i);
     localparam int unsigned TcdmPortsOffs = get_tcdm_port_offs(i);
@@ -713,135 +786,234 @@ module snitch_cluster
     sync #(.STAGES (2))
       i_sync_msip  (.clk_i, .rst_ni, .serial_i (msip_i[i]), .serial_o (irq.msip));
 
-      tcdm_req_t [TcdmPorts-1:0] tcdm_req_wo_user;
+    tcdm_req_t [TcdmPorts-1:0] tcdm_req_wo_user;
 
-      snitch_cc #(
-        .AddrWidth (PhysicalAddrWidth),
-        .DataWidth (NarrowDataWidth),
-        .DMADataWidth (WideDataWidth),
-        .DMAIdWidth (WideIdWidthIn),
-        .SnitchPMACfg (SnitchPMACfg),
-        .DMAAxiReqFifoDepth (DMAAxiReqFifoDepth),
-        .DMAReqFifoDepth (DMAReqFifoDepth),
-        .dreq_t (reqrsp_req_t),
-        .drsp_t (reqrsp_rsp_t),
-        .tcdm_req_t (tcdm_req_t),
-        .tcdm_rsp_t (tcdm_rsp_t),
-        .tcdm_user_t (tcdm_user_t),
-        .axi_req_t (axi_mst_dma_req_t),
-        .axi_rsp_t (axi_mst_dma_resp_t),
-        .hive_req_t (hive_req_t),
-        .hive_rsp_t (hive_rsp_t),
-        .acc_req_t (acc_req_t),
-        .acc_resp_t (acc_resp_t),
-        .BootAddr (BootAddr),
-        .RVE (RVE[i]),
-        .RVF (RVF[i]),
-        .RVD (RVD[i]),
-        .XF16 (XF16[i]),
-        .XF16ALT (XF16ALT[i]),
-        .XF8 (XF8[i]),
-        .XFVEC (XFVEC[i]),
-        .Xdma (Xdma[i]),
-        .IsoCrossing (IsoCrossing),
-        .Xfrep (Xfrep[i]),
-        .Xssr (Xssr[i]),
-        .Xipu (1'b0),
-        .NumIntOutstandingLoads (NumIntOutstandingLoads[i]),
-        .NumIntOutstandingMem (NumIntOutstandingMem[i]),
-        .NumFPOutstandingLoads (NumFPOutstandingLoads[i]),
-        .NumFPOutstandingMem (NumFPOutstandingMem[i]),
-        .FPUImplementation (FPUImplementation),
-        .NumDTLBEntries (NumDTLBEntries[i]),
-        .NumITLBEntries (NumITLBEntries[i]),
-        .NumSequencerInstr (NumSequencerInstr[i]),
-        .NumSsrs (NumSsrs[i]),
-        .SsrMuxRespDepth (SsrMuxRespDepth[i]),
-        .SsrCfgs (SsrCfgs[i][NumSsrs[i]-1:0]),
-        .SsrRegs (SsrRegs[i][NumSsrs[i]-1:0]),
-        .RegisterOffloadReq (RegisterOffloadReq),
-        .RegisterOffloadRsp (RegisterOffloadRsp),
-        .RegisterCoreReq (RegisterCoreReq),
-        .RegisterCoreRsp (RegisterCoreRsp),
-        .RegisterFPUReq (RegisterFPUReq),
-        .RegisterSequencer (RegisterSequencer)
-      ) i_snitch_cc (
-        .clk_i,
-        .clk_d2_i (clk_d2),
-        .rst_ni,
-        .rst_int_ss_ni (1'b1),
-        .rst_fp_ss_ni (1'b1),
-        .hart_id_i (hart_base_id_i + i),
-        .hive_req_o (hive_req[i]),
-        .hive_rsp_i (hive_rsp[i]),
-        .irq_i (irq),
-        .data_req_o (core_req[i]),
-        .data_rsp_i (core_rsp[i]),
-        .tcdm_req_o (tcdm_req_wo_user),
-        .tcdm_rsp_i (tcdm_rsp[TcdmPortsOffs+:TcdmPorts]),
-        .wake_up_sync_i (wake_up_sync[i]),
-        .axi_dma_req_o (axi_dma_req),
-        .axi_dma_res_i (axi_dma_res),
-        .axi_dma_busy_o (),
-        .axi_dma_perf_o (),
-        .core_events_o (core_events[i]),
-        .tcdm_addr_base_i (tcdm_start_address),
-        .tcdm_addr_mask_i (TCDMMask)
-      );
-      for (genvar j = 0; j < TcdmPorts; j++) begin : gen_tcdm_user
-        always_comb begin
-          tcdm_req[TcdmPortsOffs+j] = tcdm_req_wo_user[j];
-          tcdm_req[TcdmPortsOffs+j].q.user.core_id = i;
-          tcdm_req[TcdmPortsOffs+j].q.user.is_core = 1;
-        end
+    reqrsp_req_t hpu_driver_req;
+    reqrsp_rsp_t hpu_driver_rsp;
+
+    snitch_cc #(
+      .AddrWidth (PhysicalAddrWidth),
+      .DataWidth (NarrowDataWidth),
+      .DMADataWidth (WideDataWidth),
+      .DMAIdWidth (WideIdWidthIn),
+      .SnitchPMACfg (SnitchPMACfg),
+      .DMAAxiReqFifoDepth (DMAAxiReqFifoDepth),
+      .DMAReqFifoDepth (DMAReqFifoDepth),
+      .dreq_t (reqrsp_req_t),
+      .drsp_t (reqrsp_rsp_t),
+      .tcdm_req_t (tcdm_req_t),
+      .tcdm_rsp_t (tcdm_rsp_t),
+      .tcdm_user_t (tcdm_user_t),
+      .axi_req_t (axi_mst_dma_req_t),
+      .axi_rsp_t (axi_mst_dma_resp_t),
+      .hive_req_t (hive_req_t),
+      .hive_rsp_t (hive_rsp_t),
+      .acc_req_t (acc_req_t),
+      .acc_resp_t (acc_resp_t),
+      .BootAddr (BootAddr),
+      .RVE (RVE[i]),
+      .RVF (RVF[i]),
+      .RVD (RVD[i]),
+      .XF16 (XF16[i]),
+      .XF16ALT (XF16ALT[i]),
+      .XF8 (XF8[i]),
+      .XFVEC (XFVEC[i]),
+      .Xdma (Xdma[i]),
+      .IsoCrossing (IsoCrossing),
+      .Xfrep (Xfrep[i]),
+      .Xssr (Xssr[i]),
+      .Xipu (1'b0),
+      .NumIntOutstandingLoads (NumIntOutstandingLoads[i]),
+      .NumIntOutstandingMem (NumIntOutstandingMem[i]),
+      .NumFPOutstandingLoads (NumFPOutstandingLoads[i]),
+      .NumFPOutstandingMem (NumFPOutstandingMem[i]),
+      .FPUImplementation (FPUImplementation),
+      .NumDTLBEntries (NumDTLBEntries[i]),
+      .NumITLBEntries (NumITLBEntries[i]),
+      .NumSequencerInstr (NumSequencerInstr[i]),
+      .NumSsrs (NumSsrs[i]),
+      .SsrMuxRespDepth (SsrMuxRespDepth[i]),
+      .SsrCfgs (SsrCfgs[i][NumSsrs[i]-1:0]),
+      .SsrRegs (SsrRegs[i][NumSsrs[i]-1:0]),
+      .RegisterOffloadReq (RegisterOffloadReq),
+      .RegisterOffloadRsp (RegisterOffloadRsp),
+      .RegisterCoreReq (RegisterCoreReq),
+      .RegisterCoreRsp (RegisterCoreRsp),
+      .RegisterFPUReq (RegisterFPUReq),
+      .RegisterSequencer (RegisterSequencer)
+    ) i_snitch_cc (
+      .clk_i,
+      .clk_d2_i (clk_d2),
+      .rst_ni,
+      .rst_int_ss_ni (1'b1),
+      .rst_fp_ss_ni (1'b1),
+      .hart_id_i (hart_base_id_i + i),
+      .hive_req_o (hive_req[i]),
+      .hive_rsp_i (hive_rsp[i]),
+      .irq_i (irq),
+      .data_req_o (core_req[i]),
+      .data_rsp_i (core_rsp[i]),
+      .tcdm_req_o (tcdm_req_wo_user),
+      .tcdm_rsp_i (tcdm_rsp[TcdmPortsOffs+:TcdmPorts]),
+      .wake_up_sync_i (wake_up_sync[i]),
+      .axi_dma_req_o (axi_dma_req),
+      .axi_dma_res_i (axi_dma_res),
+      .axi_dma_busy_o (),
+      .axi_dma_perf_o (),
+      .core_events_o (core_events[i]),
+      .tcdm_addr_base_i (tcdm_start_address),
+      .tcdm_addr_mask_i (TCDMMask),
+      .hpu_driver_addr_base_i (hpu_driver_base_addr_i),
+      .hpu_driver_addr_mask_i (HPUDriverMemMask),
+      .data_hpu_driver_req_o (hpu_driver_req),
+      .data_hpu_driver_rsp_i (hpu_driver_rsp)
+    );
+
+    // ----
+    // HPU driver
+    // ----
+    hpu_driver #(
+      .NUM_CLUSTERS (4), // hardcoding it because it has to go soon
+      .NUM_CMDS (NumCmds),
+      .CLUSTER_ID_WIDTH (ClusterIdWidth),
+      .CORE_ID_WIDTH (CoreIdWidth),
+      .dreq_t (reqrsp_req_t),
+      .drsp_chan_t (reqrsp_rsp_chan_t),
+      .drsp_t (reqrsp_rsp_t),
+      .hpu_handler_task_t (hpu_handler_task_t),
+      .task_feedback_descr_t (task_feedback_descr_t),
+      .cmd_req_t (cmd_req_t),
+      .cmd_resp_t (cmd_resp_t)
+    ) i_hpu_driver (
+      .clk_i,
+      .rst_ni,
+      .hart_id_i            ( hart_base_id_i + i    ),
+      .hpu_task_valid_i     ( hpu_task_valid[i]     ),
+      .hpu_task_ready_o     ( hpu_task_ready[i]     ), 
+      .hpu_task_i           ( hpu_task              ),
+      .hpu_feedback_valid_o ( hpu_feedback_valid[i] ),
+      .hpu_feedback_ready_i ( hpu_feedback_ready[i] ),
+      .hpu_feedback_o       ( hpu_feedback[i]       ),
+      .hpu_active_o         ( hpu_active[i]         ),
+      .core_req_i           ( hpu_driver_req        ),
+      .core_resp_o          ( hpu_driver_rsp        ),
+      .no_dma_req_pending_i ( /* FIX ME*/           ),
+      .cmd_ready_i          ( core_cmd_ready[i]     ),
+      .cmd_valid_o          ( core_cmd_valid[i]     ),
+      .cmd_o                ( core_cmd[i]           ),
+      .cmd_resp_valid_i     ( cmd_resp_valid_i      ),
+      .cmd_resp_i           ( cmd_resp_i            )
+    );
+
+    for (genvar j = 0; j < TcdmPorts; j++) begin : gen_tcdm_user
+      always_comb begin
+        tcdm_req[TcdmPortsOffs+j] = tcdm_req_wo_user[j];
+        tcdm_req[TcdmPortsOffs+j].q.user.core_id = i;
+        tcdm_req[TcdmPortsOffs+j].q.user.is_core = 1;
       end
-      if (Xdma[i]) begin : gen_dma_connection
-        assign axi_dma_mst_req[SDMAMst] = axi_dma_req;
-        assign axi_dma_res = axi_dma_mst_res[SDMAMst];
-      end
+    end
+    if (Xdma[i]) begin : gen_dma_connection
+      assign axi_dma_mst_req[SDMAMst] = axi_dma_req;
+      assign axi_dma_res = axi_dma_mst_res[SDMAMst];
+    end
   end
 
   for (genvar i = 0; i < NrHives; i++) begin : gen_hive
-      localparam int unsigned HiveSize = get_hive_size(i);
+    localparam int unsigned HiveSize = get_hive_size(i);
 
-      hive_req_t [HiveSize-1:0] hive_req_reshape;
-      hive_rsp_t [HiveSize-1:0] hive_rsp_reshape;
+    hive_req_t [HiveSize-1:0] hive_req_reshape;
+    hive_rsp_t [HiveSize-1:0] hive_rsp_reshape;
 
-      for (genvar j = 0; j < NrCores; j++) begin : gen_hive_matrix
-        // Check whether the core actually belongs to the current hive.
-        if (Hive[j] == i) begin : gen_hive_connection
-          localparam int unsigned HivePosition = get_core_position(i, j);
-          assign hive_req_reshape[HivePosition] = hive_req[j];
-          assign hive_rsp[j] = hive_rsp_reshape[HivePosition];
-        end
+    for (genvar j = 0; j < NrCores; j++) begin : gen_hive_matrix
+      // Check whether the core actually belongs to the current hive.
+      if (Hive[j] == i) begin : gen_hive_connection
+        localparam int unsigned HivePosition = get_core_position(i, j);
+        assign hive_req_reshape[HivePosition] = hive_req[j];
+        assign hive_rsp[j] = hive_rsp_reshape[HivePosition];
       end
+    end
 
-      snitch_hive #(
-        .AddrWidth (PhysicalAddrWidth),
-        .DataWidth (NarrowDataWidth),
-        .dreq_t (reqrsp_req_t),
-        .drsp_t (reqrsp_rsp_t),
-        .hive_req_t (hive_req_t),
-        .hive_rsp_t (hive_rsp_t),
-        .CoreCount (HiveSize),
-        .ICacheLineWidth (ICacheLineWidth[i]),
-        .ICacheLineCount (ICacheLineCount[i]),
-        .ICacheSets (ICacheSets[i]),
-        .IsoCrossing (IsoCrossing),
-        .axi_req_t (axi_mst_req_t),
-        .axi_rsp_t (axi_mst_resp_t)
-      ) i_snitch_hive (
-        .clk_i,
-        .clk_d2_i (clk_d2),
-        .rst_ni,
-        .hive_req_i (hive_req_reshape),
-        .hive_rsp_o (hive_rsp_reshape),
-        .ptw_data_req_o (ptw_req[i]),
-        .ptw_data_rsp_i (ptw_rsp[i]),
-        .axi_req_o (master_req[ICache+i]),
-        .axi_rsp_i (master_resp[ICache+i])
-      );
+    snitch_hive #(
+      .AddrWidth (PhysicalAddrWidth),
+      .DataWidth (NarrowDataWidth),
+      .dreq_t (reqrsp_req_t),
+      .drsp_t (reqrsp_rsp_t),
+      .hive_req_t (hive_req_t),
+      .hive_rsp_t (hive_rsp_t),
+      .CoreCount (HiveSize),
+      .ICacheLineWidth (ICacheLineWidth[i]),
+      .ICacheLineCount (ICacheLineCount[i]),
+      .ICacheSets (ICacheSets[i]),
+      .IsoCrossing (IsoCrossing),
+      .axi_req_t (axi_mst_req_t),
+      .axi_rsp_t (axi_mst_resp_t)
+    ) i_snitch_hive (
+      .clk_i,
+      .clk_d2_i (clk_d2),
+      .rst_ni,
+      .hive_req_i (hive_req_reshape),
+      .hive_rsp_o (hive_rsp_reshape),
+      .ptw_data_req_o (ptw_req[i]),
+      .ptw_data_rsp_i (ptw_rsp[i]),
+      .axi_req_o (master_req[ICache+i]),
+      .axi_rsp_i (master_resp[ICache+i])
+    );
   end
+  
+  // --------
+  // Cluster-local task scheduler
+  // --------
+  cluster_scheduler #(
+    .NUM_CORES(NrCores),
+    .NUM_HERS_PER_CLUSTER(HERCount),
+    .L1_PKT_BUFF_SIZE(L1PktBuffSize),
+    .ADDR_WIDTH(PhysicalAddrWidth),
+    .handler_task_t(handler_task_t),
+    .hpu_handler_task_t(hpu_handler_task_t),
+    .task_feedback_descr_t(task_feedback_descr_t),
+    .feedback_descr_t(feedback_descr_t),
+    .dma_xfer_t(internal_dma_xfer_t)
+  ) i_cluster_scheduler (
+    .rst_ni,
+    .clk_i,
+    .pkt_buff_start_addr_i ( pkt_buff_start_addr_i  ),
+    .task_valid_i          ( task_valid_i           ),
+    .task_ready_o          ( task_ready_o           ),
+    .task_descr_i          ( task_descr_i           ),
+    .feedback_valid_o      ( feedback_valid_o       ),
+    .feedback_ready_i      ( feedback_ready_i       ),
+    .feedback_o            ( feedback_o             ),
+    .dma_xfer_valid_o      ( /* FIX ME */           ),
+    .dma_xfer_ready_i      ( /* FIX ME */           ),
+    .dma_xfer_o            ( /* FIX ME */           ),
+    .dma_resp_i            ( /* FIX ME */           ),
+    .hpu_task_valid_o      ( hpu_task_valid         ),
+    .hpu_task_ready_i      ( hpu_task_ready         ),
+    .hpu_task_o            ( hpu_task               ),
+    .hpu_feedback_valid_i  ( hpu_feedback_valid     ),
+    .hpu_feedback_ready_o  ( hpu_feedback_ready     ),
+    .hpu_feedback_i        ( hpu_feedback           ),
+    .hpu_active_i          ( hpu_active             ),
+    .cluster_active_o      ( cluster_active_o       )
+  );
+
+  // --------
+  // Cluster command unit
+  // --------
+  cluster_cmd #(
+    .NUM_CORES    (NrCores),
+    .cmd_req_t    (cmd_req_t),
+    .cmd_resp_t   (cmd_resp_t)
+  ) i_cluster_cmd (
+    .clk_i,
+    .rst_ni,
+    .cmd_ready_o  (core_cmd_ready),
+    .cmd_valid_i  (core_cmd_valid),
+    .cmd_i        (core_cmd),
+    .cmd_ready_i  (cmd_ready_i),
+    .cmd_valid_o  (cmd_valid_o),
+    .cmd_o        (cmd_o)
+  );
 
   // --------
   // PTW Demux

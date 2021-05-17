@@ -1,31 +1,10 @@
-![CI](https://github.com/pulp-platform/snitch/actions/workflows/ci.yml/badge.svg)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-# Snitch System
 
-This monolithic repository hosts software and hardware for the Snitch generator and generated systems.
+# Snitch for PsPIN 
 
-## Getting Started
-
-To get started, check out the [getting started guide](https://pulp-platform.github.io/snitch/ug/getting_started/).
-
-## Content
-
-What can you expect to find in this repository?
-
-- The [Snitch integer core](https://pulp-platform.github.io/snitch/rm/snitch/). This can be useful stand-alone if you are just
-  interested in re-using the core for your project, e.g., as a tiny control core
-  or you want to make a peripheral smart. The sky is the limit.
-- The [Snitch cluster](https://pulp-platform.github.io/snitch/ug/snitch_cluster/). A highly configurable cluster containing one to many
-  integer cores with optional floating-point capabilities as well as our custom
-  ISA extensions `Xssr`, `Xfrep`, and `Xdma`.
-- Any other system that is based on Snitch compute elements. Right now, we do not
-  have any open-sourced yet, but be sure that this is going to change.
-
-## Tool Requirements
-
-* `verilator = v4.100`
-* `bender >= v0.21.0`
+This is a fork of the Snitch repo: https://github.com/pulp-platform/snitch. 
+It makes changes to the Snitch cluster in order to integrate it into PsPIN: https://github.com/spcl/pspin/.
 
 ## License
 

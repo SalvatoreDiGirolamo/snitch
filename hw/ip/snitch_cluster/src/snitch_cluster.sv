@@ -888,6 +888,7 @@ module snitch_cluster
       .NUM_CMDS (NumCmds),
       .CLUSTER_ID_WIDTH (ClusterIdWidth),
       .CORE_ID_WIDTH (CoreIdWidth),
+      .DATA_WIDTH (NarrowDataWidth),
       .dreq_t (reqrsp_req_t),
       .drsp_chan_t (reqrsp_rsp_chan_t),
       .drsp_t (reqrsp_rsp_t),

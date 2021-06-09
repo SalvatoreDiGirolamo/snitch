@@ -1056,9 +1056,10 @@ module snitch_cluster
   // Cluster command unit
   // --------
   cluster_cmd #(
-    .NUM_CORES    (NrCores),
-    .cmd_req_t    (cmd_req_t),
-    .cmd_resp_t   (cmd_resp_t)
+    .NUM_CORES        (NrCores),
+    .CLUSTER_ID_WIDTH (ClusterIdWidth),
+    .cmd_req_t        (cmd_req_t),
+    .cmd_resp_t       (cmd_resp_t)
   ) i_cluster_cmd (
     .clk_i,
     .rst_ni,

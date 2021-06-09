@@ -16,3 +16,5 @@ sources:
 - src/transfer_id_gen.sv
 # Level 1:
 - src/snitch_cluster_dma_frontend.sv
+# Level 2:
+- src/snitch_cluster_dma_frontend_wrapper.sv

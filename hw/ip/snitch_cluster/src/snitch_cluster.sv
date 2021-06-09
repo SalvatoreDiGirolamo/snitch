@@ -764,21 +764,31 @@ module snitch_cluster
   task_feedback_descr_t [NrCores-1:0] hpu_feedback;
   logic [NrCores-1:0]                 hpu_active;
 
-  // hpu_drivers -> commands
+  // hpu_drivers -> command unit
   logic [NrCores-1:0]                 core_cmd_ready;
   logic [NrCores-1:0]                 core_cmd_valid;
   cmd_req_t [NrCores-1:0]             core_cmd;
 
-  // cluster_scheduler -> dma_wrap
-  localparam int unsigned NrDMAIssuers = NrCores + 1; // the + 1 is the scheduler
-  localparam int unsigned SchedulerDMAIdx = NrDMAIssuers - 1;
-  logic [NrDMAIssuers-1:0]               dma_req_valid;
-  logic [NrDMAIssuers-1:0]               dma_req_ready;
-  internal_dma_xfer_t [NrDMAIssuers-1:0] dma_req;
+  // command unit -> hpu drivers
+  logic                               core_cmd_resp_valid;
+  cmd_resp_t                          core_cmd_resp;
 
-  // dma_wrap -> issuers
-  logic [NrDMAIssuers-1:0]               dma_rsp_valid;
-  logic [NrDMAIssuers-1:0]               dma_no_req_pending;
+  // command unit -> DMA engine
+  logic                               dma_core_cmd_req_valid;
+  logic                               dma_core_cmd_req_ready;
+  cmd_req_t                           dma_core_cmd_req;
+
+  // DMA engine -> command unit
+  logic                               dma_core_cmd_resp_valid;
+  cmd_resp_t                          dma_core_cmd_resp;
+
+  // cluster_scheduler -> dma_wrap
+  logic                               dma_sched_req_valid;
+  logic                               dma_sched_req_ready;
+  internal_dma_xfer_t                 dma_sched_req;
+
+  // dma_wrap -> cluster_scheduler
+  logic                               dma_rsp_valid;
 
   for (genvar i = 0; i < NrCores; i++) begin : gen_core
     localparam int unsigned TcdmPorts = get_tcdm_ports(i);
@@ -909,12 +919,11 @@ module snitch_cluster
       .hpu_active_o         ( hpu_active[i]         ),
       .core_req_i           ( hpu_driver_req        ),
       .core_resp_o          ( hpu_driver_rsp        ),
-      .no_dma_req_pending_i ( dma_no_req_pending[i] ),
       .cmd_ready_i          ( core_cmd_ready[i]     ),
       .cmd_valid_o          ( core_cmd_valid[i]     ),
       .cmd_o                ( core_cmd[i]           ),
-      .cmd_resp_valid_i     ( cmd_resp_valid_i      ),
-      .cmd_resp_i           ( cmd_resp_i            )
+      .cmd_resp_valid_i     ( core_cmd_resp_valid   ),
+      .cmd_resp_i           ( core_cmd_resp         )
     );
 
     for (genvar j = 0; j < TcdmPorts; j++) begin : gen_tcdm_user
@@ -931,8 +940,6 @@ module snitch_cluster
       assign axi_dma_res = axi_dma_mst_res[SDMAMst];
     end
     */
-
-    assign dma_req_valid[i] = 1'b0;
   end
 
   for (genvar i = 0; i < NrHives; i++) begin : gen_hive
@@ -980,28 +987,32 @@ module snitch_cluster
   // --------
   // Cluster-local DMA engine
   // --------
-  snitch_cluster_dma_frontend #(
-    .NumCores(NrDMAIssuers),
+  snitch_cluster_dma_frontend_wrapper #(
     .DmaAxiIdWidth(WideIdWidthIn),
     .DmaDataWidth(WideDataWidth),
     .DmaAddrWidth(PhysicalAddrWidth),
     .AxiAxReqDepth(DMAAxiReqFifoDepth),
-    .TfReqFifoDepth(DMAReqFifoDepth),
+    .TfReqFifoDepth(DMAReqFifoDepth), 
+    .cmd_req_t(cmd_req_t),
+    .cmd_resp_t(cmd_resp_t),
     .axi_req_t(axi_mst_dma_req_t),
     .axi_res_t(axi_mst_dma_resp_t),
     .transf_descr_t(internal_dma_xfer_t)
-  ) i_cluster_dma (
+  ) i_cluster_dma_wrapper (
     .clk_i,
     .rst_ni,
     .cluster_id_i     ( hart_base_id_i           ),
-    .dma_req_valid_i  ( dma_req_valid            ),
-    .dma_req_ready_o  ( dma_req_ready            ),
-    .dma_req_i        ( dma_req                  ),
+    .cmd_req_i        ( dma_core_cmd_req         ),
+    .cmd_req_valid_i  ( dma_core_cmd_req_valid   ),
+    .cmd_req_ready_o  ( dma_core_cmd_req_ready   ),
+    .cmd_resp_o       ( dma_core_cmd_resp        ),
+    .cmd_resp_valid_o ( dma_core_cmd_resp_valid  ),
+    .dma_req_valid_i  ( dma_sched_req_valid      ),
+    .dma_req_ready_o  ( dma_sched_req_ready      ),
+    .dma_req_i        ( dma_sched_req            ),
     .dma_rsp_valid_o  ( dma_rsp_valid            ),
     .axi_dma_req_o    ( axi_dma_mst_req[SDMAMst] ),
-    .axi_dma_res_i    ( axi_dma_mst_res[SDMAMst] ),
-    .busy_o           (                          ),
-    .no_req_pending_o ( dma_no_req_pending       )
+    .axi_dma_res_i    ( axi_dma_mst_res[SDMAMst] )
   );
   
   // --------
@@ -1020,25 +1031,25 @@ module snitch_cluster
   ) i_cluster_scheduler (
     .rst_ni,
     .clk_i,
-    .pkt_buff_start_addr_i ( pkt_buff_start_addr_i          ),
-    .task_valid_i          ( task_valid_i                   ),
-    .task_ready_o          ( task_ready_o                   ),
-    .task_descr_i          ( task_descr_i                   ),
-    .feedback_valid_o      ( feedback_valid_o               ),
-    .feedback_ready_i      ( feedback_ready_i               ),
-    .feedback_o            ( feedback_o                     ),
-    .dma_xfer_valid_o      ( dma_req_valid[SchedulerDMAIdx] ),
-    .dma_xfer_ready_i      ( dma_req_ready[SchedulerDMAIdx] ),
-    .dma_xfer_o            ( dma_req[SchedulerDMAIdx]       ),
-    .dma_resp_i            ( dma_rsp_valid[SchedulerDMAIdx] ),
-    .hpu_task_valid_o      ( hpu_task_valid                 ),
-    .hpu_task_ready_i      ( hpu_task_ready                 ),
-    .hpu_task_o            ( hpu_task                       ),
-    .hpu_feedback_valid_i  ( hpu_feedback_valid             ),
-    .hpu_feedback_ready_o  ( hpu_feedback_ready             ),
-    .hpu_feedback_i        ( hpu_feedback                   ),
-    .hpu_active_i          ( hpu_active                     ),
-    .cluster_active_o      ( cluster_active_o               )
+    .pkt_buff_start_addr_i ( pkt_buff_start_addr_i ),
+    .task_valid_i          ( task_valid_i          ),
+    .task_ready_o          ( task_ready_o          ),
+    .task_descr_i          ( task_descr_i          ),
+    .feedback_valid_o      ( feedback_valid_o      ),
+    .feedback_ready_i      ( feedback_ready_i      ),
+    .feedback_o            ( feedback_o            ),
+    .dma_xfer_valid_o      ( dma_sched_req_valid   ),
+    .dma_xfer_ready_i      ( dma_sched_req_ready   ),
+    .dma_xfer_o            ( dma_sched_req         ),
+    .dma_resp_i            ( dma_rsp_valid         ),
+    .hpu_task_valid_o      ( hpu_task_valid        ),
+    .hpu_task_ready_i      ( hpu_task_ready        ),
+    .hpu_task_o            ( hpu_task              ),
+    .hpu_feedback_valid_i  ( hpu_feedback_valid    ),
+    .hpu_feedback_ready_o  ( hpu_feedback_ready    ),
+    .hpu_feedback_i        ( hpu_feedback          ),
+    .hpu_active_i          ( hpu_active            ),
+    .cluster_active_o      ( cluster_active_o      )
   );
 
   // --------
@@ -1051,12 +1062,22 @@ module snitch_cluster
   ) i_cluster_cmd (
     .clk_i,
     .rst_ni,
-    .cmd_ready_o  (core_cmd_ready),
-    .cmd_valid_i  (core_cmd_valid),
-    .cmd_i        (core_cmd),
-    .cmd_ready_i  (cmd_ready_i),
-    .cmd_valid_o  (cmd_valid_o),
-    .cmd_o        (cmd_o)
+    .cluster_id_i               ( hart_base_id_i[31:ClusterIdWidth] ),
+    .cmd_ready_o                ( core_cmd_ready                    ),
+    .cmd_valid_i                ( core_cmd_valid                    ),
+    .cmd_i                      ( core_cmd                          ),
+    .cmd_resp_valid_o           ( core_cmd_resp_valid               ),
+    .cmd_resp_o                 ( core_cmd_resp                     ),
+    .uncluster_cmd_ready_i      ( cmd_ready_i                       ),
+    .uncluster_cmd_valid_o      ( cmd_valid_o                       ),
+    .uncluster_cmd_o            ( cmd_o                             ),
+    .uncluster_cmd_resp_valid_i ( cmd_resp_valid_i                  ),
+    .uncluster_cmd_resp_i       ( cmd_resp_i                        ),
+    .dma_cmd_ready_i            ( dma_core_cmd_req_ready            ),
+    .dma_cmd_valid_o            ( dma_core_cmd_req_valid            ),
+    .dma_cmd_o                  ( dma_core_cmd_req                  ),
+    .dma_cmd_resp_valid_i       ( dma_core_cmd_resp_valid           ),
+    .dma_cmd_resp_i             ( dma_core_cmd_resp                 )
   );
 
   // --------

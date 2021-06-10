@@ -104,7 +104,7 @@ module snitch_cluster_dma_frontend_wrapper #(
     assign core_xfer_descr.dst_addr  = cmd_req_i.descr.nic_dma_cmd.dst_addr;
     assign core_xfer_descr.src_addr  = cmd_req_i.descr.nic_dma_cmd.src_addr;
     assign core_xfer_descr.deburst   = 0;
-    assign core_xfer_descr.decouple  = 0;
+    assign core_xfer_descr.decouple  = 1;
     assign core_xfer_descr.serialize = 0;
     
     snitch_cluster_dma_frontend #(

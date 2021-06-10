@@ -399,6 +399,22 @@ module snitch_cc #(
     assign ipu_pvalid = '0;
   end
 
+  // virtual stdout 
+  dreq_t snitch_dreq_filtered;
+  drsp_t snitch_drsp_filtered;  
+  virtual_stdout_demux #(
+    .dreq_t(dreq_t),
+    .drsp_t(drsp_t)
+  ) i_virtual_stdout_demux (
+    .clk_i        ( clk_i                ),
+    .rst_ni       ( rst_ni               ),
+    .hart_id_i    ( hart_id_i            ),
+    .core_req_i   ( snitch_dreq_q        ),
+    .core_resp_o  ( snitch_drsp_q        ),
+    .data_req_o   ( snitch_dreq_filtered ),
+    .data_resp_i  ( snitch_drsp_filtered )
+  );
+
   // pragma translate_off
   snitch_pkg::fpu_trace_port_t fpu_trace;
   snitch_pkg::fpu_sequencer_trace_port_t fpu_sequencer_trace;
@@ -486,8 +502,8 @@ module snitch_cc #(
     ) i_reqrsp_mux (
       .clk_i,
       .rst_ni,
-      .slv_req_i ({fpu_dreq, snitch_dreq_q}),
-      .slv_rsp_o ({fpu_drsp, snitch_drsp_q}),
+      .slv_req_i ({fpu_dreq, snitch_dreq_filtered}),
+      .slv_rsp_o ({fpu_drsp, snitch_drsp_filtered}),
       .mst_req_o (merged_dreq),
       .mst_rsp_i (merged_drsp)
     );
@@ -509,8 +525,8 @@ module snitch_cc #(
     assign acc_seq.error = '0;
     assign acc_pvalid    = '0;
 
-    assign merged_dreq = snitch_dreq_q;
-    assign snitch_drsp_q = merged_drsp;
+    assign merged_dreq = snitch_dreq_filtered;
+    assign snitch_drsp_filtered = merged_drsp;
 
     assign core_events_o = '0;
   end

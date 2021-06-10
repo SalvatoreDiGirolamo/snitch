@@ -40,6 +40,7 @@ sources:
 - src/snitch_barrier.sv
 - src/snitch_fp_ss.sv
 - src/snitch_shared_muldiv.sv
+- src/virtual_stdout_demux.sv
 # Level 2:
 - src/snitch_cc.sv
 - src/snitch_clkdiv2.sv

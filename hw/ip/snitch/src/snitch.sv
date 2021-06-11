@@ -209,7 +209,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
   alu_op_e alu_op;
 
   typedef enum logic [3:0] {
-    None, Reg, IImmediate, UImmediate, JImmediate, SImmediate, SFImmediate, PC, CSR, CSRImmmediate, RegRs3
+    None, Reg, IImmediate, UImmediate, JImmediate, SImmediate, SFImmediate, PC, CSR, CSRImmmediate, RegRd, RegRs3
   } op_select_e;
   op_select_e opa_select, opb_select;
 
@@ -388,7 +388,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
   end
   // TODO(zarubaf): This can probably be described a bit more efficient
   assign opa_ready = (opa_select != Reg) | ~sb_q[rs1];
-  assign opb_ready = rs2_ready & rs3_ready;
+  assign opb_ready = ((opb_select != Reg & opb_select != SImmediate) | ~sb_q[rs2]) & ((opb_select != RegRd) | ~sb_q[rd]);
   assign operands_ready = opa_ready & opb_ready;
   // either we are not using the destination register or we need to make
   // sure that its destination operand is not marked busy in the scoreboard.
@@ -1981,6 +1981,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           write_rd = 1'b0;
         end else illegal_inst = 1'b1;
       end
+      /*
       // Post-increment loads/stores
       P_LB_IRPOST: begin // Xpulpimg: p.lb rd,iimm(rs1!)
         if (snitch_pkg::XPULPIMG) begin
@@ -2293,7 +2294,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           illegal_inst = 1'b1;
         end
       end
-
+      */
       default: begin
         illegal_inst = 1'b1;
       end
@@ -2920,8 +2921,8 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
       end else if (acc_pvalid_i) begin
         retire_acc = 1'b1;
         gpr_we[0] = 1'b1;
-        gpr_waddr[0] = acc_pid_i;
-        gpr_wdata[0] = acc_pdata_i[31:0];
+        gpr_waddr[0] = acc_prsp_i.id;
+        gpr_wdata[0] = acc_prsp_i.data[31:0];
         acc_pready_o = 1'b1;
       end
     end
@@ -2950,8 +2951,8 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
         end else if (acc_pvalid_i) begin
           retire_acc = 1'b1;
           gpr_we[1] = 1'b1;
-          gpr_waddr[1] = acc_pid_i;
-          gpr_wdata[1] = acc_pdata_i[31:0];
+          gpr_waddr[1] = acc_prsp_i.id;
+          gpr_wdata[1] = acc_prsp_i.data[31:0];
           acc_pready_o = 1'b1;
         end
       // if we are not retiring another instruction retire the load now
@@ -2959,8 +2960,8 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
         if (acc_pvalid_i) begin
           retire_acc = 1'b1;
           gpr_we[0] = 1'b1;
-          gpr_waddr[0] = acc_pid_i;
-          gpr_wdata[0] = acc_pdata_i[31:0];
+          gpr_waddr[0] = acc_prsp_i.id;
+          gpr_wdata[0] = acc_prsp_i.data[31:0];
           acc_pready_o = 1'b1;
         end
         if (lsu_pvalid) begin

@@ -83,12 +83,15 @@ module virtual_stdout_demux #(
         resp_inj_q <= 1'b0;
       end else begin
         resp_inj_q <= resp_inj_d;
+        if (resp_inj_d) begin
+          append(core_req_i.q.data & 32'hFF);
+        end
       end
     end
 
     // Assertions
     assert property(
-      @(posedge clk_i) (resp_inj_q |-> core_req_i.q_valid))
+      @(posedge clk_i) (resp_inj_q |-> core_req_i.p_ready))
         else $fatal (1, "Core is not ready to receive response!");
 
   `endif

@@ -209,9 +209,9 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
   alu_op_e alu_op;
 
   typedef enum logic [3:0] {
-    None, Reg, IImmediate, UImmediate, JImmediate, SImmediate, SFImmediate, PC, CSR, CSRImmmediate, RegRd, RegRs3
+    None, Reg, IImmediate, UImmediate, JImmediate, SImmediate, SFImmediate, PC, CSR, CSRImmmediate, RegRd, RegRs2
   } op_select_e;
-  op_select_e opa_select, opb_select;
+  op_select_e opa_select, opb_select, opc_select;
 
   logic write_rd; // write rd this cycle
   logic uses_rd;
@@ -375,7 +375,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
   logic operands_ready;
   logic dst_ready;
   logic rs2_ready, rs3_ready;
-  logic opa_ready, opb_ready;
+  logic opa_ready, opb_ready, opc_ready;
   logic dstrd_ready, dstrs1_ready;
 
   always_comb begin
@@ -389,7 +389,8 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
   // TODO(zarubaf): This can probably be described a bit more efficient
   assign opa_ready = (opa_select != Reg) | ~sb_q[rs1];
   assign opb_ready = ((opb_select != Reg & opb_select != SImmediate) | ~sb_q[rs2]) & ((opb_select != RegRd) | ~sb_q[rd]);
-  assign operands_ready = opa_ready & opb_ready;
+  assign opc_ready = ((opc_select != Reg) | ~sb_q[rd]) & ((opc_select != RegRs2) | ~sb_q[rs2]);
+  assign operands_ready = opa_ready & opb_ready & opc_ready;
   // either we are not using the destination register or we need to make
   // sure that its destination operand is not marked busy in the scoreboard.
   assign dstrd_ready = ~uses_rd | (uses_rd & ~sb_q[rd]);
@@ -466,6 +467,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
     alu_op = Add;
     opa_select = None;
     opb_select = None;
+    opc_select = None;
 
     flush_i_valid_o = 1'b0;
     tlb_flush = 1'b0;
@@ -2224,14 +2226,19 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           illegal_inst = 1'b1;
         end
       end
+      // opb is usually assigned with the content of rs2; in stores with reg-reg
+      // addressing mode, however, the offset is stored in rd, so rd content is
+      // instead assigned to opb: if we cross such signals now (rd -> opb,
+      // rs2 -> opc) we don't have to do that in the ALU, with bigger muxes
       P_SB_RRPOST: begin  // Xpulpimg: p.sb rs2,rs3(rs1!)
         if (snitch_pkg::XPULPIMG) begin
           write_rd = 1'b0;
           write_rs1 = 1'b1;
           is_store = 1'b1;
           is_postincr = 1'b1;
-          opa_select = Reg;
-          opb_select = RegRs3;
+          opa_select = Reg; // rs1 base address
+          opb_select = RegRd; // rs3 (i.e. rd) offset
+          opc_select = RegRs2; // rs2 source data
         end else begin
           illegal_inst = 1'b1;
         end
@@ -2244,7 +2251,8 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           is_postincr = 1'b1;
           ls_size = HalfWord;
           opa_select = Reg;
-          opb_select = RegRs3;
+          opb_select = RegRd;
+          opc_select = RegRs2;
         end else begin
           illegal_inst = 1'b1;
         end
@@ -2257,7 +2265,8 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           is_postincr = 1'b1;
           ls_size = Word;
           opa_select = Reg;
-          opb_select = RegRs3;
+          opb_select = RegRd;
+          opc_select = RegRs2;
         end else begin
           illegal_inst = 1'b1;
         end
@@ -2267,7 +2276,8 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           write_rd = 1'b0;
           is_store = 1'b1;
           opa_select = Reg;
-          opb_select = RegRs3;
+          opb_select = RegRd;
+          opc_select = RegRs2;
         end else begin
           illegal_inst = 1'b1;
         end
@@ -2278,7 +2288,8 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           is_store = 1'b1;
           ls_size = HalfWord;
           opa_select = Reg;
-          opb_select = RegRs3;
+          opb_select = RegRd;
+          opc_select = RegRs2;
         end else begin
           illegal_inst = 1'b1;
         end
@@ -2289,7 +2300,8 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           is_store = 1'b1;
           ls_size = Word;
           opa_select = Reg;
-          opb_select = RegRs3;
+          opb_select = RegRd;
+          opc_select = RegRs2;
         end else begin
           illegal_inst = 1'b1;
         end
@@ -2667,7 +2679,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
       SFImmediate, SImmediate: opb = simm;
       PC: opb = pc_q;
       CSR: opb = csr_rvalue;
-      RegRs3: opb = gpr_rdata[2];
+      RegRd: opb = gpr_rdata[2];
       default: opb = '0;
     endcase
   end

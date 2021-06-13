@@ -22,8 +22,8 @@ inst.rs: $(ALL_OPCODES) parse-opcodes
 	cat opcodes opcodes-rvc opcodes-rvc-pseudo opcodes-pseudo opcodes-pulp opcodes-sflt | ./parse-opcodes -rust > $@
 	rustfmt $@
 
-inst.sverilog: opcodes opcodes-pseudo parse-opcodes opcodes-sflt opcodes-rep opcodes-dma
-	cat opcodes opcodes-rvc opcodes-rvc-pseudo opcodes-rep opcodes-dma opcodes-pseudo opcodes-sflt opcodes-ipu | ./parse-opcodes -sverilog > $@
+inst.sverilog: opcodes opcodes-pseudo parse-opcodes opcodes-sflt opcodes-rep opcodes-dma opcodes-pspin
+	cat opcodes opcodes-rvc opcodes-rvc-pseudo opcodes-rep opcodes-dma opcodes-pseudo opcodes-sflt opcodes-ipu opcodes-pspin opcodes-ssr | ./parse-opcodes -sverilog > $@
 
 instr-table.tex: $(ALL_OPCODES) parse-opcodes
 	cat opcodes opcodes-pseudo opcodes-pulp | ./parse-opcodes -tex > $@

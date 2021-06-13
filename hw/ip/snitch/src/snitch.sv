@@ -1983,7 +1983,6 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           write_rd = 1'b0;
         end else illegal_inst = 1'b1;
       end
-      /*
       // Post-increment loads/stores
       P_LB_IRPOST: begin // Xpulpimg: p.lb rd,iimm(rs1!)
         if (snitch_pkg::XPULPIMG) begin
@@ -2306,7 +2305,6 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           illegal_inst = 1'b1;
         end
       end
-      */
       default: begin
         illegal_inst = 1'b1;
       end

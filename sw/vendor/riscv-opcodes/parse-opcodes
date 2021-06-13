@@ -40,6 +40,12 @@ arglut['imm5'] = (24,20)
 arglut['stagger_max'] = (14,12)
 arglut['stagger_mask'] = (11,8)
 
+# for xpulpimg
+arglut['imm5'] = (24,20)
+arglut['prs3'] = (11,7)
+arglut['imm6'] = (25,20)
+
+
 bits_imm12 = [
   ("imm12lo", 4, 0, 0), # imm12lo[4:0]  -> imm[4:0]
   ("imm12hi", 6, 0, 5), # imm12hi[6:0] -> imm[11:5]

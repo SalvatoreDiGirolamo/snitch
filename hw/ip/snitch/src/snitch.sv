@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: SHL-0.51
 
 // Author: Florian Zaruba <zarubaf@iis.ee.ethz.ch>
+// Contributors:
+//   - Sergio Mazzola <smazzola@student.ethz.ch>
+//   - Salvatore Di Girolamo <digirols@inf.ethz.ch>
+//
 // Description: Top-Level of Snitch Integer Core RV32E
 
 `include "common_cells/registers.svh"

@@ -7,6 +7,9 @@
 
 package snitch_pkg;
 
+  // Xpulpimg extension enabled?
+  localparam bit XPULPIMG = 1'b1;
+
   localparam dm::hartinfo_t SnitchHartinfo = '{
     zero1: '0,
     nscratch: 1,

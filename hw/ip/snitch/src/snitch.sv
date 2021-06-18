@@ -41,6 +41,8 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
   parameter bit          Xipu      = 1,
   /// Implement one or two write ports into the register file
   parameter int          RegNrWritePorts = 2,
+  /// Number of hw loops
+  parameter int unsigned NumHWLoops = 2,
   /// Data port request type.
   parameter type         dreq_t    = logic,
   /// Data port response type.
@@ -105,6 +107,9 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
   localparam logic [31:0] DmBaseAddress = 0;
   localparam int RegWidth = RVE ? 4 : 5;
   localparam int RegNrReadPorts = snitch_pkg::XPULPIMG ? 3 : 2;
+  
+  // HWLoop addressing
+  localparam int unsigned HWLPIDWidth = $clog2(NumHWLoops);
 
   /// Total physical address portion.
   localparam int unsigned PPNSize = AddrWidth - PAGE_SHIFT;
@@ -123,7 +128,6 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
   logic [31:0] pc_d, pc_q;
   logic wfi_d, wfi_q;
   logic [31:0] consec_pc;
-  // Immediates
   logic [31:0] iimm, uimm, jimm, bimm, simm;
   /* verilator lint_off WIDTH */
   assign iimm = $signed({inst_data_i[31:20]});
@@ -172,6 +176,15 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
   logic [PPNSize-1:0] trans_active_exp;
   logic  tlb_flush;
 
+  // HW loops
+  logic [31:0]            hwloop_start;
+  logic [31:0]            hwloop_target;
+  logic [31:0]            hwloop_cnt;
+  logic [2:0]             hwloop_we;
+  logic [HWLPIDWidth-1:0] hwloop_regid;
+  logic                   hwloop_target_mux_sel;
+  logic                   hwloop_start_mux_sel;
+  logic                   hwloop_cnt_mux_sel;
 
   typedef enum logic [1:0] {
     Byte = 2'b00,
@@ -518,6 +531,12 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
     // Debug request and wake up are possibilties to move out of
     // the low power state.
     wfi_d = (wake_up_sync_i || irq_i.debug || debug_q || any_interrupt_pending) ? 1'b0 : wfi_q;
+
+    // hw loops
+    hwloop_we               = '0;
+    hwloop_start_mux_sel    = 1'b0;
+    hwloop_target_mux_sel   = 1'b0;
+    hwloop_cnt_mux_sel      = 1'b0;
 
     unique casez (inst_data_i)
       ADD: begin
@@ -2309,6 +2328,67 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           illegal_inst = 1'b1;
         end
       end
+      // Hardware loops
+      LP_STARTI: begin
+        if (snitch_pkg::XHWLP) begin
+          // lp.starti: set start address to PC + I-type immediate
+          hwloop_we[0]           = 1'b1;
+          hwloop_start_mux_sel   = 1'b0;
+        end else begin
+          illegal_inst = 1'b1;
+        end   
+      end
+      LP_ENDI: begin
+        if (snitch_pkg::XHWLP) begin
+          // lp.endi: set end address to PC + I-type immediate
+          hwloop_we[1]           = 1'b1;
+        end else begin
+          illegal_inst = 1'b1;
+        end     
+      end
+      LP_COUNT: begin
+        if (snitch_pkg::XHWLP) begin
+          // lp.count: initialize counter from rs1
+          hwloop_we[2]         = 1'b1;
+          hwloop_cnt_mux_sel   = 1'b1;
+          opa_select = Reg;
+        end else begin
+          illegal_inst = 1'b1;
+        end  
+      end
+      LP_COUNTI: begin
+        if (snitch_pkg::XHWLP) begin
+          // lp.counti: initialize counter from I-type immediate
+          hwloop_we[2]         = 1'b1;
+          hwloop_cnt_mux_sel   = 1'b0;
+        end else begin
+          illegal_inst = 1'b1;
+        end  
+      end
+      LP_SETUP: begin
+        if (snitch_pkg::XHWLP) begin
+            // lp.setup: initialize counter from rs1, set start address to
+            // next instruction and end address to PC + I-type immediate
+            hwloop_we              = 3'b111;
+            hwloop_start_mux_sel   = 1'b1;
+            hwloop_cnt_mux_sel     = 1'b1;
+            opa_select             = Reg;
+        end else begin
+          illegal_inst = 1'b1;
+        end  
+      end
+      LP_SETUPI: begin
+        if (snitch_pkg::XHWLP) begin
+          // lp.setupi: initialize counter from immediate, set start address to
+          // next instruction and end address to PC + I-type immediate
+          hwloop_we               = 3'b111;
+          hwloop_start_mux_sel    = 1'b1;
+          hwloop_target_mux_sel   = 1'b1;
+          hwloop_cnt_mux_sel      = 1'b0;
+        end else begin
+          illegal_inst = 1'b1;
+        end  
+      end
       default: begin
         illegal_inst = 1'b1;
       end
@@ -2658,6 +2738,61 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
     .wdata_i   ( gpr_wdata ),
     .we_i      ( gpr_we    )
   );
+
+  if (snitch_pkg::XHWLP) begin
+    // Hardware loops registers
+    snitch_hwloop_regs #(
+      .N_REGS ( NumHWLoops )
+    ) hwloop_regs_i (
+      .clk                   ( clk          ),
+      .rst_n                 ( rst_i        ),
+
+      // from ID
+      .hwlp_start_data_i     ( hwloop_start  ),
+      .hwlp_end_data_i       ( hwloop_target ),
+      .hwlp_cnt_data_i       ( hwloop_cnt    ),
+      .hwlp_we_i             ( hwloop_we     ),
+      .hwlp_regid_i          ( hwloop_regid  ),
+
+      // from controller
+      .valid_i               ( /* hwloop_valid */ ),
+
+      // to hwloop controller
+      .hwlp_start_addr_o     ( /* hwlp_start_o */ ),
+      .hwlp_end_addr_o       ( /* hwlp_end_o   */ ),
+      .hwlp_counter_o        ( /* hwlp_cnt_o   */ ),
+
+      // from hwloop controller
+      .hwlp_dec_cnt_i        ( /* hwlp_dec_cnt_i */)
+    );
+
+    // hwloop register id
+    assign hwloop_regid = rd[0];   // rd contains hwloop register id
+
+    // hwloop target mux
+    always_comb begin : hwloop_target_mux
+      case (hwloop_target_mux_sel)
+        1'b0: hwloop_target = pc_q + {iimm[30:0], 1'b0};
+        1'b1: hwloop_target = pc_q + {rs1[RegWidth-1:0], 1'b0};
+      endcase
+    end
+
+    // hwloop start mux
+    always_comb begin : hwloop_start_mux
+      case (hwloop_start_mux_sel)
+        1'b0: hwloop_start = hwloop_target;   // for PC + I imm
+        1'b1: hwloop_start = pc_d;            // for next PC
+      endcase
+    end
+
+    // hwloop cnt mux
+    always_comb begin : hwloop_cnt_mux
+      case (hwloop_cnt_mux_sel)
+        1'b0: hwloop_cnt = iimm;
+        1'b1: hwloop_cnt = opa;
+      endcase;
+    end
+  end
 
   // --------------------
   // Operand Select

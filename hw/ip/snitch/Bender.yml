@@ -23,14 +23,15 @@ sources:
 - src/riscv_instr.sv
 # Level 1:
 - src/snitch_pkg.sv
+- src/snitch_hwloop_controller.sv
+- src/snitch_hwloop_regs.sv
 # Level 2:
 - src/snitch_regfile_ff.sv
 # - src/snitch_regfile_fpga.sv
 # - src/snitch_regfile_latch.sv
 - src/snitch_lsu.sv
 - src/snitch_l0_tlb.sv
-- src/snitch_hwloop_controller.sv
-- src/snitch_hwloop_regs.sv
+- src/snitch_hwloop_top.sv
 # Level 1:
 - target: not(disable_pmcs)
   defines:

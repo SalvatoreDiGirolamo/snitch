@@ -41,6 +41,8 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
   parameter bit          Xipu      = 1,
   /// Implement one or two write ports into the register file
   parameter int          RegNrWritePorts = 2,
+  /// Enable hardware loops
+  parameter bit          Xhwlp     = 1,
   /// Number of hw loops
   parameter int unsigned NumHWLoops = 2,
   /// Data port request type.
@@ -185,6 +187,9 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
   logic                   hwloop_target_mux_sel;
   logic                   hwloop_start_mux_sel;
   logic                   hwloop_cnt_mux_sel;
+  logic                   hwloop_valid;
+  logic                   hwlp_jump;
+  logic [31:0]            hwlp_targ_addr;
 
   typedef enum logic [1:0] {
     Byte = 2'b00,
@@ -234,7 +239,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
   logic uses_rd;
   logic write_rs1; // write rs1 destination this cycle
   logic uses_rs1; 
-  typedef enum logic [2:0] {Consec, Alu, Exception, MRet, SRet, DRet} next_pc_e;
+  typedef enum logic [2:0] {Consec, Alu, Exception, MRet, SRet, DRet, HWLoop} next_pc_e;
   next_pc_e next_pc;
 
   typedef enum logic [1:0] {RdAlu, RdConsecPC, RdBypass} rd_select_e;
@@ -453,6 +458,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
         MRet: npc = epc_q[M];
         SRet: npc = epc_q[S];
         DRet: npc = dpc_q;
+        HWLoop: npc = hwlp_targ_addr;
         default:;
       endcase
       // default update
@@ -2330,7 +2336,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
       end
       // Hardware loops
       LP_STARTI: begin
-        if (snitch_pkg::XHWLP) begin
+        if (Xhwlp) begin
           // lp.starti: set start address to PC + I-type immediate
           hwloop_we[0]           = 1'b1;
           hwloop_start_mux_sel   = 1'b0;
@@ -2339,7 +2345,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
         end   
       end
       LP_ENDI: begin
-        if (snitch_pkg::XHWLP) begin
+        if (Xhwlp) begin
           // lp.endi: set end address to PC + I-type immediate
           hwloop_we[1]           = 1'b1;
         end else begin
@@ -2347,7 +2353,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
         end     
       end
       LP_COUNT: begin
-        if (snitch_pkg::XHWLP) begin
+        if (Xhwlp) begin
           // lp.count: initialize counter from rs1
           hwloop_we[2]         = 1'b1;
           hwloop_cnt_mux_sel   = 1'b1;
@@ -2357,7 +2363,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
         end  
       end
       LP_COUNTI: begin
-        if (snitch_pkg::XHWLP) begin
+        if (Xhwlp) begin
           // lp.counti: initialize counter from I-type immediate
           hwloop_we[2]         = 1'b1;
           hwloop_cnt_mux_sel   = 1'b0;
@@ -2366,7 +2372,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
         end  
       end
       LP_SETUP: begin
-        if (snitch_pkg::XHWLP) begin
+        if (Xhwlp) begin
             // lp.setup: initialize counter from rs1, set start address to
             // next instruction and end address to PC + I-type immediate
             hwloop_we              = 3'b111;
@@ -2378,7 +2384,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
         end  
       end
       LP_SETUPI: begin
-        if (snitch_pkg::XHWLP) begin
+        if (Xhwlp) begin
           // lp.setupi: initialize counter from immediate, set start address to
           // next instruction and end address to PC + I-type immediate
           hwloop_we               = 3'b111;
@@ -2402,6 +2408,10 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
      uses_rs1 = 1'b0;
      acc_qvalid_o = 1'b0;
      next_pc = Exception;
+    end
+
+    if (hwlp_jump) begin
+      next_pc = HWLoop;
     end
   end
 
@@ -2739,32 +2749,26 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
     .we_i      ( gpr_we    )
   );
 
-  if (snitch_pkg::XHWLP) begin
+  if (Xhwlp) begin : hwloop_gen
     // Hardware loops registers
-    snitch_hwloop_regs #(
-      .N_REGS ( NumHWLoops )
-    ) hwloop_regs_i (
-      .clk                   ( clk          ),
-      .rst_n                 ( rst_i        ),
-
-      // from ID
-      .hwlp_start_data_i     ( hwloop_start  ),
-      .hwlp_end_data_i       ( hwloop_target ),
-      .hwlp_cnt_data_i       ( hwloop_cnt    ),
-      .hwlp_we_i             ( hwloop_we     ),
-      .hwlp_regid_i          ( hwloop_regid  ),
-
-      // from controller
-      .valid_i               ( /* hwloop_valid */ ),
-
-      // to hwloop controller
-      .hwlp_start_addr_o     ( /* hwlp_start_o */ ),
-      .hwlp_end_addr_o       ( /* hwlp_end_o   */ ),
-      .hwlp_counter_o        ( /* hwlp_cnt_o   */ ),
-
-      // from hwloop controller
-      .hwlp_dec_cnt_i        ( /* hwlp_dec_cnt_i */)
+    snitch_hwloop_top #(
+      .NumHWLoops (NumHWLoops)
+    ) i_snitch_hwloop_top (
+      .clk_i              ( clk_i          ),
+      .rst_i              ( rst_i          ),
+      .hwlp_start_data_i  ( hwloop_start   ),
+      .hwlp_end_data_i    ( hwloop_target  ),
+      .hwlp_cnt_data_i    ( hwloop_cnt     ),
+      .hwlp_we_i          ( hwloop_we      ),
+      .hwlp_regid_i       ( hwloop_regid   ),     
+      .hwloop_valid_i     ( hwloop_valid   ),
+      .current_pc_i       ( pc_q           ),
+      .hwlp_jump_o        ( hwlp_jump      ),
+      .hwlp_targ_addr_o   ( hwlp_targ_addr )
     );
+
+    // asserted if this a valid hwloop instruction
+    assign hwloop_valid = inst_valid_o & ~stall;
 
     // hwloop register id
     assign hwloop_regid = rd[0];   // rd contains hwloop register id

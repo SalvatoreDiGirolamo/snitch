@@ -24,8 +24,10 @@ module virtual_stdout_demux #(
   input  drsp_t           data_resp_i
 );
 
-  `ifndef TARGET_SYNTHESIS
-    `define VIRTUAL_STDOUT 
+  `ifndef TARGET_SYNTHESIS 
+    `define VIRTUAL_STDOUT
+  `elsif TARGET_VERILATOR
+    `define VIRTUAL_STDOUT
   `endif
   
   `ifndef VIRTUAL_STDOUT

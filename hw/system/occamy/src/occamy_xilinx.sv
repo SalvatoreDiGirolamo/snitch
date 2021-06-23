@@ -56,6 +56,8 @@ module occamy_xilinx
     output logic [ 3:0]      spim_sd_en_o,
     input        [ 3:0]      spim_sd_i,
 
+    input logic [3:0] ext_irq_i,
+
     // Boot ROM
     output logic        bootrom_en_o,
     // This is actually too wide. But the address width depends on the ROM size, so let Vivado handle
@@ -606,10 +608,12 @@ module occamy_xilinx
 
   // Occamy top-level
   occamy_top i_occamy (
-      .bootrom_req_o(bootrom_req),
-      .bootrom_rsp_i(bootrom_rsp),
-      .clk_mgr_req_o(clk_mgr_req),
-      .clk_mgr_rsp_i(clk_mgr_rsp),
+      .bootrom_req_o (bootrom_req),
+      .bootrom_rsp_i (bootrom_rsp),
+      .clk_mgr_req_o (clk_mgr_req),
+      .clk_mgr_rsp_i (clk_mgr_rsp),
+      .pcie_cfg_req_o(),
+      .pcie_cfg_rsp_i('0),
       .*
   );
 

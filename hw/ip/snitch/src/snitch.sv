@@ -235,7 +235,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
   } op_select_e;
   op_select_e opa_select, opb_select, opc_select;
 
-  logic write_rd; // write rd this cycle
+  logic write_rd; // write destination this cycle
   logic uses_rd;
   logic write_rs1; // write rs1 destination this cycle
   logic uses_rs1; 
@@ -1083,13 +1083,13 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
       FADD_S,
       FSUB_S,
       FMUL_S,
-      FDIV_S,
+      // FDIV_S,
       FSGNJ_S,
       FSGNJN_S,
       FSGNJX_S,
       FMIN_S,
       FMAX_S,
-      FSQRT_S,
+      // FSQRT_S,
       FMADD_S,
       FMSUB_S,
       FNMSUB_S,
@@ -1108,13 +1108,13 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
       VFSUB_R_S,
       VFMUL_S,
       VFMUL_R_S,
-      VFDIV_S,
-      VFDIV_R_S,
+      // VFDIV_S,
+      // VFDIV_R_S,
       VFMIN_S,
       VFMIN_R_S,
       VFMAX_S,
       VFMAX_R_S,
-      VFSQRT_S,
+      // VFSQRT_S,
       VFMAC_S,
       VFMAC_R_S,
       VFMRE_S,
@@ -1138,13 +1138,13 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
       FADD_D,
       FSUB_D,
       FMUL_D,
-      FDIV_D,
+      // FDIV_D,
       FSGNJ_D,
       FSGNJN_D,
       FSGNJX_D,
       FMIN_D,
       FMAX_D,
-      FSQRT_D,
+      // FSQRT_D,
       FMADD_D,
       FMSUB_D,
       FNMSUB_D,
@@ -1169,8 +1169,8 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
       FADD_H,
       FSUB_H,
       FMUL_H,
-      FDIV_H,
-      FSQRT_H,
+      // FDIV_H,
+      // FSQRT_H,
       FMADD_H,
       FMSUB_H,
       FNMSUB_H,
@@ -1231,13 +1231,13 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
       VFSUB_R_H,
       VFMUL_H,
       VFMUL_R_H,
-      VFDIV_H,
-      VFDIV_R_H,
+      // VFDIV_H,
+      // VFDIV_R_H,
       VFMIN_H,
       VFMIN_R_H,
       VFMAX_H,
       VFMAX_R_H,
-      VFSQRT_H,
+      // VFSQRT_H,
       VFMAC_H,
       VFMAC_R_H,
       VFMRE_H,
@@ -1315,13 +1315,13 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
       VFSUB_R_AH,
       VFMUL_AH,
       VFMUL_R_AH,
-      VFDIV_AH,
-      VFDIV_R_AH,
+      // VFDIV_AH,
+      // VFDIV_R_AH,
       VFMIN_AH,
       VFMIN_R_AH,
       VFMAX_AH,
       VFMAX_R_AH,
-      VFSQRT_AH,
+      // VFSQRT_AH,
       VFMAC_AH,
       VFMAC_R_AH,
       VFMRE_AH,
@@ -1369,13 +1369,13 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
       FADD_B,
       FSUB_B,
       FMUL_B,
-      FDIV_B,
+      // FDIV_B,
       FSGNJ_B,
       FSGNJN_B,
       FSGNJX_B,
       FMIN_B,
       FMAX_B,
-      FSQRT_B,
+      // FSQRT_B,
       FMADD_B,
       FMSUB_B,
       FNMSUB_B,
@@ -1430,13 +1430,13 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
       VFSUB_R_B,
       VFMUL_B,
       VFMUL_R_B,
-      VFDIV_B,
-      VFDIV_R_B,
+      // VFDIV_B,
+      // VFDIV_R_B,
       VFMIN_B,
       VFMIN_R_B,
       VFMAX_B,
       VFMAX_R_B,
-      VFSQRT_B,
+      // VFSQRT_B,
       VFMAC_B,
       VFMAC_R_B,
       VFMRE_B,
@@ -1986,6 +1986,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
         if (Xssr) begin
           acc_qreq_o.addr = SSR_CFG;
           acc_qvalid_o = valid_instr;
+          acc_register_rd = 1'b1;
         end else illegal_inst = 1'b1;
       end
       SCFGWI: begin
@@ -2001,6 +2002,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           acc_qreq_o.addr = SSR_CFG;
           opb_select = Reg;
           acc_qvalid_o = valid_instr;
+          acc_register_rd = 1'b1;
         end else illegal_inst = 1'b1;
       end
       SCFGW: begin
@@ -2980,8 +2982,8 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
     .clk_i (clk_i),
     .rst_i (rst_i),
     .lsu_qtag_i (rd),
-    .lsu_qwrite (is_store),
-    .lsu_qsigned (is_signed),
+    .lsu_qwrite_i (is_store),
+    .lsu_qsigned_i (is_signed),
     .lsu_qaddr_i (ls_paddr),
     .lsu_qdata_i (lsu_qdata),
     .lsu_qsize_i (ls_size),
@@ -3148,5 +3150,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
   `ASSERT(InstructionInterfaceStable,
       (inst_valid_o && inst_ready_i && inst_cacheable_o) ##1 (inst_valid_o && $stable(inst_addr_o))
       |-> inst_ready_i && $stable(inst_data_i), clk_i, rst_i)
+
+  `ASSERT(RegWriteKnown, gpr_we |-> !$isunknown(gpr_wdata), clk_i, rst_i)
 
 endmodule

@@ -99,6 +99,7 @@ module testharness import occamy_pkg::*; (
     .bootrom_rsp_i (bootrom_regbus_rsp),
     .clk_mgr_req_o (clk_mgr_req),
     .clk_mgr_rsp_i (clk_mgr_rsp),
+    .ext_irq_i ('0),
 % for i in range(8):
     .hbm_${i}_req_o (hbm_channel_${i}_req),
     .hbm_${i}_rsp_i (hbm_channel_${i}_rsp),
@@ -106,6 +107,8 @@ module testharness import occamy_pkg::*; (
 % for i in range(nr_s1_quadrants):
     .hbi_${i}_req_i ('0),
     .hbi_${i}_rsp_o (),
+    .hbi_${i}_req_o (),
+    .hbi_${i}_rsp_i ('0),
 % endfor
     .pcie_axi_req_o (pcie_axi_req),
     .pcie_axi_rsp_i (pcie_axi_rsp),

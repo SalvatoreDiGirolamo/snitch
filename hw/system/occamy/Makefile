@@ -43,26 +43,36 @@ test/bootrom.elf test/bootrom.dump test/bootrom.bin: test/bootrom.S test/bootrom
 ##########
 update-source:
 	@echo "[SOLDER]  Generating sources"
-	@$(ROOT)/util/occamygen.py --cfg src/occamy_cfg.hjson --graph addrmap.dot --outdir . \
-		--dts test/occamy.dts \
-		src/occamy_top.sv \
-		src/occamy_pkg.sv \
-		src/occamy_quadrant_s1.sv \
-		src/occamy_xilinx.sv \
-		test/testharness.sv \
-		src/occamy_cva6.sv
+	@echo "[SOLDER]  RTL"
+	@$(ROOT)/util/occamygen.py --cfg src/occamy_cfg.hjson --graph addrmap.dot --outdir src --wrapper --memories \
+		--top-sv src/occamy_top.sv.tpl \
+		--pkg-sv src/occamy_pkg.sv.tpl \
+		--quadrant-s1 src/occamy_quadrant_s1.sv.tpl \
+		--xilinx-sv src/occamy_xilinx.sv.tpl \
+		--cva6-sv src/occamy_cva6.sv.tpl
+	@echo "[SOLDER]  Testbench"
+	@$(ROOT)/util/occamygen.py --cfg src/occamy_cfg.hjson --graph addrmap.dot --outdir test \
+		--testharness-sv test/testharness.sv.tpl
+	@echo "[SOLDER]  Device Tree"
+	@$(ROOT)/util/occamygen.py --cfg src/occamy_cfg.hjson --outdir . --dts test/occamy.dts
 	@echo "[VERIBLE] Formatting"
 	@verible-verilog-format --inplace src/occamy_quadrant_s1.sv src/occamy_pkg.sv src/occamy_top.sv src/occamy_xilinx.sv src/occamy_cva6.sv
 
+update-clint:
+	mkdir -p src/clint
+	$(ROOT)/hw/ip/clint/util/gen_clint.py -c 1 $(ROOT)/hw/ip/clint/data/clint.sv.tpl > src/clint/clint.sv
+	$(ROOT)/hw/ip/clint/util/gen_clint.py -c 1 $(ROOT)/hw/ip/clint/data/clint.hjson.tpl > src/clint/clint.hjson
+	$(ROOT)/util/regtool.py -r -t src/clint src/clint/clint.hjson
+
 update-plic:
 	mkdir -p src/rv_plic
-	$(ROOT)/hw/vendor/lowrisc_opentitan/rv_plic/util/reg_rv_plic.py -s 58 -t 2 -p 6 $(ROOT)/hw/vendor/lowrisc_opentitan/rv_plic/data/rv_plic.sv.tpl > src/rv_plic/rv_plic.sv
-	$(ROOT)/hw/vendor/lowrisc_opentitan/rv_plic/util/reg_rv_plic.py -s 58 -t 2 -p 6 $(ROOT)/hw/vendor/lowrisc_opentitan/rv_plic/data/rv_plic.hjson.tpl > src/rv_plic/rv_plic.hjson
+	$(ROOT)/hw/vendor/lowrisc_opentitan/rv_plic/util/reg_rv_plic.py -s 65 -t 2 -p 6 $(ROOT)/hw/vendor/lowrisc_opentitan/rv_plic/data/rv_plic.sv.tpl > src/rv_plic/rv_plic.sv
+	$(ROOT)/hw/vendor/lowrisc_opentitan/rv_plic/util/reg_rv_plic.py -s 65 -t 2 -p 6 $(ROOT)/hw/vendor/lowrisc_opentitan/rv_plic/data/rv_plic.hjson.tpl > src/rv_plic/rv_plic.hjson
 	$(ROOT)/util/regtool.py -r -t src/rv_plic src/rv_plic/rv_plic.hjson
 
 # Regenerate the SoC register.
-update-socreg: src/occamy_soc_reg/occamy_soc_reg.hjson
-	$(REGGEN) -r src/occamy_soc_reg/occamy_soc_reg.hjson --outdir src/occamy_soc_reg/
+update-socreg: src/occamy_soc_ctrl/occamy_soc_reg.hjson
+	$(REGGEN) -r src/occamy_soc_ctrl/occamy_soc_reg.hjson --outdir src/occamy_soc_ctrl/
 
 addrmap.png: update-source
 	dot -Tpng addrmap.dot > addrmap.png
@@ -87,7 +97,7 @@ ${VSIM_BUILDDIR}/compile.vsim.tcl: $(VSIM_SOURCES) ${TB_SRCS} ${TB_DIR}/rtl_lib.
 	echo 'return 0' >> $@
 
 bin/occamy_top.vsim: ${VSIM_BUILDDIR}/compile.vsim.tcl work/lib/libfesvr.a
-	$(call QUESTASIM)
+	$(call QUESTASIM,tb_bin)
 
 #######
 # VCS #

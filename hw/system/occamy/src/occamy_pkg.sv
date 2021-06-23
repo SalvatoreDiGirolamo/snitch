@@ -10,6 +10,7 @@
 
 `include "axi/typedef.svh"
 `include "register_interface/typedef.svh"
+`include "apb/typedef.svh"
 
 package occamy_pkg;
   localparam int unsigned MaxTransaction = 16;
@@ -50,6 +51,10 @@ package occamy_pkg;
     logic i2c_acq_overflow;
     logic i2c_ack_stop;
     logic i2c_host_timeout;
+    logic ecc_uncorrectable;
+    logic ecc_correctable;
+    logic [3:0] ext_irq;
+    logic zero;
   } occamy_interrupt_t;
 
   localparam logic [15:0] PartNum = 2;
@@ -90,31 +95,29 @@ package occamy_pkg;
 
   /// Outputs of the `soc_axi_lite_periph_xbar` crossbar.
   typedef enum int {
-    SOC_AXI_LITE_PERIPH_XBAR_OUT_CLINT,
     SOC_AXI_LITE_PERIPH_XBAR_OUT_DEBUG,
     SOC_AXI_LITE_PERIPH_XBAR_NUM_OUTPUTS
   } soc_axi_lite_periph_xbar_outputs_e;
 
   /// Configuration of the `soc_axi_lite_periph_xbar` crossbar.
   localparam axi_pkg::xbar_cfg_t SocAxiLitePeriphXbarCfg = '{
-    NoSlvPorts:         SOC_AXI_LITE_PERIPH_XBAR_NUM_INPUTS,
-    NoMstPorts:         SOC_AXI_LITE_PERIPH_XBAR_NUM_OUTPUTS,
-    MaxSlvTrans:        4,
-    MaxMstTrans:        4,
-    FallThrough:        0,
-    LatencyMode:        axi_pkg::CUT_ALL_PORTS,
-    AxiIdWidthSlvPorts: 0,
-    AxiIdUsedSlvPorts:  0,
-    AxiAddrWidth:       48,
-    AxiDataWidth:       64,
-    NoAddrRules:        2
-  };
+  NoSlvPorts:         SOC_AXI_LITE_PERIPH_XBAR_NUM_INPUTS,
+  NoMstPorts:         SOC_AXI_LITE_PERIPH_XBAR_NUM_OUTPUTS,
+  MaxSlvTrans:        4,
+  MaxMstTrans:        4,
+  FallThrough:        0,
+  LatencyMode:        axi_pkg::CUT_ALL_PORTS,
+  AxiIdWidthSlvPorts: 0,
+  AxiIdUsedSlvPorts:  0,
+  AxiAddrWidth:       48,
+  AxiDataWidth:       64,
+  NoAddrRules:        1
+};
 
   /// Address map of the `soc_axi_lite_periph_xbar` crossbar.
-  localparam xbar_rule_48_t [1:0] SocAxiLitePeriphXbarAddrmap = '{
-    '{ idx: 0, start_addr: 48'h04000000, end_addr: 48'h04100000 },
-    '{ idx: 1, start_addr: 48'h00000000, end_addr: 48'h00001000 }
-  };
+  localparam xbar_rule_48_t [0:0] SocAxiLitePeriphXbarAddrmap = '{
+  '{ idx: 0, start_addr: 48'h00000000, end_addr: 48'h00001000 }
+};
 
   // AXI plugs of the `soc_axi_lite_periph_xbar` crossbar.
 
@@ -144,7 +147,9 @@ package occamy_pkg;
 
   /// Outputs of the `soc_regbus_periph_xbar` crossbar.
   typedef enum int {
+    SOC_REGBUS_PERIPH_XBAR_OUT_CLINT,
     SOC_REGBUS_PERIPH_XBAR_OUT_SOC_CTRL,
+    SOC_REGBUS_PERIPH_XBAR_OUT_CHIP_CTRL,
     SOC_REGBUS_PERIPH_XBAR_OUT_CLK_MGR,
     SOC_REGBUS_PERIPH_XBAR_OUT_BOOTROM,
     SOC_REGBUS_PERIPH_XBAR_OUT_PLIC,
@@ -152,20 +157,28 @@ package occamy_pkg;
     SOC_REGBUS_PERIPH_XBAR_OUT_GPIO,
     SOC_REGBUS_PERIPH_XBAR_OUT_I2C,
     SOC_REGBUS_PERIPH_XBAR_OUT_SPIM,
+    SOC_REGBUS_PERIPH_XBAR_OUT_PCIE_CFG,
+    SOC_REGBUS_PERIPH_XBAR_OUT_HBI_CFG,
+    SOC_REGBUS_PERIPH_XBAR_OUT_HBI_CTL,
     SOC_REGBUS_PERIPH_XBAR_NUM_OUTPUTS
   } soc_regbus_periph_xbar_outputs_e;
 
   /// Address map of the `soc_regbus_periph_xbar` crossbar.
-  localparam xbar_rule_48_t [7:0] SocRegbusPeriphXbarAddrmap = '{
-    '{ idx: 0, start_addr: 48'h02000000, end_addr: 48'h02001000 },
-    '{ idx: 1, start_addr: 48'h02001000, end_addr: 48'h02002000 },
-    '{ idx: 2, start_addr: 48'h01000000, end_addr: 48'h01020000 },
-    '{ idx: 3, start_addr: 48'h0c000000, end_addr: 48'h10000000 },
-    '{ idx: 4, start_addr: 48'h02002000, end_addr: 48'h02003000 },
-    '{ idx: 5, start_addr: 48'h02003000, end_addr: 48'h02004000 },
-    '{ idx: 6, start_addr: 48'h02004000, end_addr: 48'h02005000 },
-    '{ idx: 7, start_addr: 48'h03000000, end_addr: 48'h03020000 }
-  };
+  localparam xbar_rule_48_t [12:0] SocRegbusPeriphXbarAddrmap = '{
+  '{ idx: 0, start_addr: 48'h04000000, end_addr: 48'h04100000 },
+  '{ idx: 1, start_addr: 48'h02000000, end_addr: 48'h02001000 },
+  '{ idx: 2, start_addr: 48'h02005000, end_addr: 48'h02006000 },
+  '{ idx: 3, start_addr: 48'h02001000, end_addr: 48'h02002000 },
+  '{ idx: 4, start_addr: 48'h01000000, end_addr: 48'h01020000 },
+  '{ idx: 5, start_addr: 48'h0c000000, end_addr: 48'h10000000 },
+  '{ idx: 6, start_addr: 48'h02002000, end_addr: 48'h02003000 },
+  '{ idx: 7, start_addr: 48'h02003000, end_addr: 48'h02004000 },
+  '{ idx: 8, start_addr: 48'h02004000, end_addr: 48'h02005000 },
+  '{ idx: 9, start_addr: 48'h03000000, end_addr: 48'h03020000 },
+  '{ idx: 10, start_addr: 48'h05000000, end_addr: 48'h05020000 },
+  '{ idx: 11, start_addr: 48'h06000000, end_addr: 48'h06010000 },
+  '{ idx: 12, start_addr: 48'h07000000, end_addr: 48'h07010000 }
+};
 
   /// Inputs of the `soc_wide_xbar` crossbar.
   typedef enum int {
@@ -214,18 +227,18 @@ package occamy_pkg;
 
   /// Configuration of the `soc_wide_xbar` crossbar.
   localparam axi_pkg::xbar_cfg_t SocWideXbarCfg = '{
-    NoSlvPorts:         SOC_WIDE_XBAR_NUM_INPUTS,
-    NoMstPorts:         SOC_WIDE_XBAR_NUM_OUTPUTS,
-    MaxSlvTrans:        4,
-    MaxMstTrans:        4,
-    FallThrough:        0,
-    LatencyMode:        axi_pkg::CUT_ALL_PORTS,
-    AxiIdWidthSlvPorts: 3,
-    AxiIdUsedSlvPorts:  3,
-    AxiAddrWidth:       48,
-    AxiDataWidth:       512,
-    NoAddrRules:        19
-  };
+  NoSlvPorts:         SOC_WIDE_XBAR_NUM_INPUTS,
+  NoMstPorts:         SOC_WIDE_XBAR_NUM_OUTPUTS,
+  MaxSlvTrans:        4,
+  MaxMstTrans:        4,
+  FallThrough:        0,
+  LatencyMode:        axi_pkg::CUT_ALL_PORTS,
+  AxiIdWidthSlvPorts: 3,
+  AxiIdUsedSlvPorts:  3,
+  AxiAddrWidth:       48,
+  AxiDataWidth:       512,
+  NoAddrRules:        19
+};
 
   // AXI bus with 48 bit address, 512 bit data, 3 bit IDs, and 0 bit user data.
   `AXI_TYPEDEF_ALL(axi_a48_d512_i3_u0, logic [47:0], logic [2:0], logic [511:0], logic [63:0],
@@ -280,6 +293,7 @@ package occamy_pkg;
     SOC_NARROW_XBAR_OUT_S1_QUADRANT_6,
     SOC_NARROW_XBAR_OUT_S1_QUADRANT_7,
     SOC_NARROW_XBAR_OUT_PERIPH,
+    SOC_NARROW_XBAR_OUT_SPM,
     SOC_NARROW_XBAR_OUT_SOC_WIDE,
     SOC_NARROW_XBAR_OUT_REGBUS_PERIPH,
     SOC_NARROW_XBAR_NUM_OUTPUTS
@@ -287,18 +301,18 @@ package occamy_pkg;
 
   /// Configuration of the `soc_narrow_xbar` crossbar.
   localparam axi_pkg::xbar_cfg_t SocNarrowXbarCfg = '{
-    NoSlvPorts:         SOC_NARROW_XBAR_NUM_INPUTS,
-    NoMstPorts:         SOC_NARROW_XBAR_NUM_OUTPUTS,
-    MaxSlvTrans:        4,
-    MaxMstTrans:        4,
-    FallThrough:        0,
-    LatencyMode:        axi_pkg::CUT_ALL_PORTS,
-    AxiIdWidthSlvPorts: 4,
-    AxiIdUsedSlvPorts:  4,
-    AxiAddrWidth:       48,
-    AxiDataWidth:       64,
-    NoAddrRules:        13
-  };
+  NoSlvPorts:         SOC_NARROW_XBAR_NUM_INPUTS,
+  NoMstPorts:         SOC_NARROW_XBAR_NUM_OUTPUTS,
+  MaxSlvTrans:        4,
+  MaxMstTrans:        4,
+  FallThrough:        0,
+  LatencyMode:        axi_pkg::CUT_ALL_PORTS,
+  AxiIdWidthSlvPorts: 4,
+  AxiIdUsedSlvPorts:  4,
+  AxiAddrWidth:       48,
+  AxiDataWidth:       64,
+  NoAddrRules:        13
+};
 
   // AXI bus with 48 bit address, 64 bit data, 4 bit IDs, and 0 bit user data.
   `AXI_TYPEDEF_ALL(axi_a48_d64_i4_u0, logic [47:0], logic [3:0], logic [63:0], logic [7:0],
@@ -341,6 +355,7 @@ package occamy_pkg;
   /// Outputs of the `wide_xbar_quadrant_s1` crossbar.
   typedef enum int {
     WIDE_XBAR_QUADRANT_S1_OUT_TOP,
+    WIDE_XBAR_QUADRANT_S1_OUT_HBI,
     WIDE_XBAR_QUADRANT_S1_OUT_CLUSTER_0,
     WIDE_XBAR_QUADRANT_S1_OUT_CLUSTER_1,
     WIDE_XBAR_QUADRANT_S1_OUT_CLUSTER_2,
@@ -350,18 +365,18 @@ package occamy_pkg;
 
   /// Configuration of the `wide_xbar_quadrant_s1` crossbar.
   localparam axi_pkg::xbar_cfg_t WideXbarQuadrantS1Cfg = '{
-    NoSlvPorts:         WIDE_XBAR_QUADRANT_S1_NUM_INPUTS,
-    NoMstPorts:         WIDE_XBAR_QUADRANT_S1_NUM_OUTPUTS,
-    MaxSlvTrans:        4,
-    MaxMstTrans:        4,
-    FallThrough:        0,
-    LatencyMode:        axi_pkg::CUT_ALL_PORTS,
-    AxiIdWidthSlvPorts: 3,
-    AxiIdUsedSlvPorts:  3,
-    AxiAddrWidth:       48,
-    AxiDataWidth:       512,
-    NoAddrRules:        4
-  };
+  NoSlvPorts:         WIDE_XBAR_QUADRANT_S1_NUM_INPUTS,
+  NoMstPorts:         WIDE_XBAR_QUADRANT_S1_NUM_OUTPUTS,
+  MaxSlvTrans:        4,
+  MaxMstTrans:        4,
+  FallThrough:        0,
+  LatencyMode:        axi_pkg::CUT_ALL_PORTS,
+  AxiIdWidthSlvPorts: 3,
+  AxiIdUsedSlvPorts:  3,
+  AxiAddrWidth:       48,
+  AxiDataWidth:       512,
+  NoAddrRules:        5
+};
 
   // AXI bus with 48 bit address, 512 bit data, 6 bit IDs, and 0 bit user data.
   `AXI_TYPEDEF_ALL(axi_a48_d512_i6_u0, logic [47:0], logic [5:0], logic [511:0], logic [63:0],
@@ -409,18 +424,18 @@ package occamy_pkg;
 
   /// Configuration of the `narrow_xbar_quadrant_s1` crossbar.
   localparam axi_pkg::xbar_cfg_t NarrowXbarQuadrantS1Cfg = '{
-    NoSlvPorts:         NARROW_XBAR_QUADRANT_S1_NUM_INPUTS,
-    NoMstPorts:         NARROW_XBAR_QUADRANT_S1_NUM_OUTPUTS,
-    MaxSlvTrans:        4,
-    MaxMstTrans:        4,
-    FallThrough:        0,
-    LatencyMode:        axi_pkg::CUT_ALL_PORTS,
-    AxiIdWidthSlvPorts: 4,
-    AxiIdUsedSlvPorts:  4,
-    AxiAddrWidth:       48,
-    AxiDataWidth:       64,
-    NoAddrRules:        4
-  };
+  NoSlvPorts:         NARROW_XBAR_QUADRANT_S1_NUM_INPUTS,
+  NoMstPorts:         NARROW_XBAR_QUADRANT_S1_NUM_OUTPUTS,
+  MaxSlvTrans:        4,
+  MaxMstTrans:        4,
+  FallThrough:        0,
+  LatencyMode:        axi_pkg::CUT_ALL_PORTS,
+  AxiIdWidthSlvPorts: 4,
+  AxiIdUsedSlvPorts:  4,
+  AxiAddrWidth:       48,
+  AxiDataWidth:       64,
+  NoAddrRules:        4
+};
 
   // AXI bus with 48 bit address, 64 bit data, 7 bit IDs, and 0 bit user data.
   `AXI_TYPEDEF_ALL(axi_a48_d64_i7_u0, logic [47:0], logic [6:0], logic [63:0], logic [7:0],
@@ -445,6 +460,11 @@ package occamy_pkg;
   localparam int NARROW_XBAR_QUADRANT_S1_IW_IN = 4;
   // verilog_lint: waive parameter-name-style
   localparam int NARROW_XBAR_QUADRANT_S1_IW_OUT = 7;
+
+  // APB bus with 48 bit address, 32 bit data.
+  `APB_TYPEDEF_REQ_T(apb_a48_d32_req_t, logic [47:0], logic [31:0], logic [3:0])
+  `APB_TYPEDEF_RESP_T(apb_a48_d32_rsp_t, logic [31:0])
+
   // AXI bus with 48 bit address, 64 bit data, 3 bit IDs, and 0 bit user data.
   `AXI_TYPEDEF_ALL(axi_a48_d64_i3_u0, logic [47:0], logic [2:0], logic [63:0], logic [7:0],
                    logic [0:0])

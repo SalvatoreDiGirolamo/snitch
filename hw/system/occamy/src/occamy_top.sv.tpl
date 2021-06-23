@@ -65,6 +65,22 @@ module occamy_top
   output ${soc_regbus_periph_xbar.out_clk_mgr.req_type()} clk_mgr_req_o,
   input  ${soc_regbus_periph_xbar.out_clk_mgr.rsp_type()} clk_mgr_rsp_i,
 
+  /// HBI Config and APB Control
+  output ${soc_regbus_periph_xbar.out_hbi_cfg.req_type()} hbi_cfg_req_o,
+  input  ${soc_regbus_periph_xbar.out_hbi_cfg.rsp_type()} hbi_cfg_rsp_i,
+  output ${apb_hbi_ctl.req_type()} apb_hbi_ctl_req_o,
+  input  ${apb_hbi_ctl.rsp_type()} apb_hbi_ctl_rsp_i,
+
+  /// PCIe/DDR Config
+  output ${soc_regbus_periph_xbar.out_pcie_cfg.req_type()} pcie_cfg_req_o,
+  input  ${soc_regbus_periph_xbar.out_pcie_cfg.rsp_type()} pcie_cfg_rsp_i,
+  /// Chip specific control registers
+  output ${soc_regbus_periph_xbar.out_chip_ctrl.req_type()} chip_ctrl_req_o,
+  input  ${soc_regbus_periph_xbar.out_chip_ctrl.rsp_type()} chip_ctrl_rsp_i,
+
+  // "external interrupts from uncore - "programmable"
+  input logic [3:0] ext_irq_i,
+
   /// HBM2e Ports
 % for i in range(8):
   output  ${soc_wide_xbar.__dict__["out_hbm_{}".format(i)].req_type()} hbm_${i}_req_o,
@@ -75,6 +91,8 @@ module occamy_top
 % for i in range(nr_s1_quadrants):
   input   ${soc_wide_xbar.__dict__["in_hbi_{}".format(i)].req_type()} hbi_${i}_req_i,
   output  ${soc_wide_xbar.__dict__["in_hbi_{}".format(i)].rsp_type()} hbi_${i}_rsp_o,
+  output  ${wide_xbar_quadrant_s1.out_hbi.req_type()} hbi_${i}_req_o,
+  input   ${wide_xbar_quadrant_s1.out_hbi.rsp_type()} hbi_${i}_rsp_i,
 % endfor
 
   /// PCIe Ports
@@ -85,14 +103,30 @@ module occamy_top
   output ${soc_wide_xbar.in_pcie.rsp_type()} pcie_axi_rsp_o
 );
 
-  occamy_soc_reg_pkg::occamy_soc_reg2hw_t soc_ctrl_in;
-  occamy_soc_reg_pkg::occamy_soc_hw2reg_t soc_ctrl_out;
+  occamy_soc_reg_pkg::occamy_soc_reg2hw_t soc_ctrl_out;
+  occamy_soc_reg_pkg::occamy_soc_hw2reg_t soc_ctrl_in;
+  always_comb soc_ctrl_in = '0;
+
+  <% spm_words = cfg["spm"]["size"]*1024//(soc_narrow_xbar.out_spm.dw//8) %>
+
+  typedef logic [${util.clog2(spm_words) + util.clog2(soc_narrow_xbar.out_spm.dw//8)-1}:0] mem_addr_t;
+  typedef logic [${soc_narrow_xbar.out_spm.dw-1}:0] mem_data_t;
+  typedef logic [${soc_narrow_xbar.out_spm.dw//8-1}:0] mem_strb_t;
+
+  logic spm_req, spm_we, spm_rvalid;
+  logic [1:0] spm_rerror;
+  mem_addr_t spm_addr;
+  mem_data_t spm_wdata, spm_rdata;
+  mem_strb_t spm_strb;
+
   // Machine timer and machine software interrupt pending.
   logic mtip, msip;
   // Supervisor and machine-mode external interrupt pending.
   logic [1:0] eip;
   logic debug_req;
   occamy_interrupt_t irq;
+
+  assign irq.ext_irq = ext_irq_i;
 
   addr_t [${nr_s1_quadrants-1}:0] s1_quadrant_base_addr;
   % for i in range(nr_s1_quadrants):
@@ -137,9 +171,9 @@ module occamy_top
   );
 
   % for i in range(nr_s1_quadrants):
-  ////////////////////
-  // S1 Quadrants ${i} //
-  ////////////////////
+  ///////////////////
+  // S1 Quadrant ${i} //
+  ///////////////////
   <%
     cut_width = 1
     narrow_in = soc_narrow_xbar.__dict__["out_s1_quadrant_{}".format(i)].cut(context, cut_width, name="narrow_in_cut_{}".format(i))
@@ -148,7 +182,12 @@ module occamy_top
     wide_in = soc_wide_xbar.__dict__["out_s1_quadrant_{}".format(i)].cut(context, cut_width, name="wide_in_cut_{}".format(i))
     wide_out = soc_wide_xbar.__dict__["in_s1_quadrant_{}".format(i)].copy(name="wide_out_cut_{}".format(i)).declare(context)
     wide_out.cut(context, cut_width, to=soc_wide_xbar.__dict__["in_s1_quadrant_{}".format(i)])
+    wide_hbi_out = wide_xbar_quadrant_s1.out_hbi.copy(name="wide_hbi_out_cut_{}".format(i)).declare(context)
+    wide_hbi_cut_out = wide_hbi_out.cut(context, cut_width)
   %>
+  assign hbi_${i}_req_o = ${wide_hbi_cut_out.req_name()};
+  assign ${wide_hbi_cut_out.rsp_name()} = hbi_${i}_rsp_i;
+
   occamy_quadrant_s1 i_occamy_quadrant_s1_${i} (
     .clk_i (clk_i),
     .rst_ni (rst_ni),
@@ -158,6 +197,8 @@ module occamy_top
     .meip_i ('0),
     .mtip_i ('0),
     .msip_i ('0),
+    .quadrant_hbi_out_req_o (${wide_hbi_out.req_name()}),
+    .quadrant_hbi_out_rsp_i (${wide_hbi_out.rsp_name()}),
     .quadrant_narrow_out_req_o (${narrow_out.req_name()}),
     .quadrant_narrow_out_rsp_i (${narrow_out.rsp_name()}),
     .quadrant_narrow_in_req_i (${narrow_in.req_name()}),
@@ -169,6 +210,56 @@ module occamy_top
   );
 
   % endfor
+
+
+  //////////
+  // SPM //
+  //////////
+  <% narrow_spm_cdc = soc_narrow_xbar.out_spm.cdc(context, "clk_periph_i", "rst_periph_ni", "spm_cdc") %>
+
+  axi_to_mem #(
+    .axi_req_t (${narrow_spm_cdc.req_type()}),
+    .axi_resp_t (${narrow_spm_cdc.rsp_type()}),
+    .AddrWidth (${util.clog2(spm_words) + util.clog2(narrow_spm_cdc.dw//8)}),
+    .DataWidth (${narrow_spm_cdc.dw}),
+    .IdWidth (${narrow_spm_cdc.iw}),
+    .NumBanks (1),
+    .BufDepth (1)
+  ) i_axi_to_mem (
+    .clk_i (${narrow_spm_cdc.clk}),
+    .rst_ni (${narrow_spm_cdc.rst}),
+    .busy_o (),
+    .axi_req_i (${narrow_spm_cdc.req_name()}),
+    .axi_resp_o (${narrow_spm_cdc.rsp_name()}),
+    .mem_req_o (spm_req),
+    .mem_gnt_i (spm_req), // always granted - it's an SPM.
+    .mem_addr_o (spm_addr),
+    .mem_wdata_o (spm_wdata),
+    .mem_strb_o (spm_strb),
+    .mem_atop_o (),
+    .mem_we_o (spm_we),
+    .mem_rvalid_i (spm_rvalid),
+    .mem_rdata_i (spm_rdata)
+  );
+
+  cc_ram_1p_adv #(
+    .NumWords (${spm_words}),
+    .DataWidth (${narrow_spm_cdc.dw}),
+    .ByteWidth (8),
+    .EnableInputPipeline (1'b1),
+    .EnableOutputPipeline (1'b1)
+  ) i_spm_cut (
+    .clk_i (${narrow_spm_cdc.clk}),
+    .rst_ni (${narrow_spm_cdc.rst}),
+    .req_i (spm_req),
+    .we_i (spm_we),
+    .addr_i (spm_addr[${util.clog2(spm_words) + util.clog2(narrow_spm_cdc.dw//8)-1}:${util.clog2(narrow_spm_cdc.dw//8)}]),
+    .wdata_i (spm_wdata),
+    .be_i (spm_strb),
+    .rdata_o (spm_rdata),
+    .rvalid_o (spm_rvalid),
+    .rerror_o (spm_rerror)
+  );
 
   /// HBM2e Ports
 % for i in range(8):
@@ -182,6 +273,11 @@ module occamy_top
   assign ${soc_wide_xbar.__dict__["in_hbi_{}".format(i)].req_name()} = hbi_${i}_req_i;
   assign hbi_${i}_rsp_o = ${soc_wide_xbar.__dict__["in_hbi_{}".format(i)].rsp_name()};
 % endfor
+
+  // APB port for HBI
+  <% soc_regbus_periph_xbar.out_hbi_ctl.to_apb(context, "apb_hbi_ctl", to=apb_hbi_ctl) %>
+  assign apb_hbi_ctl_req_o = ${apb_hbi_ctl.req_name()};
+  assign ${apb_hbi_ctl.rsp_name()} = apb_hbi_ctl_rsp_i;
 
   /////////////////
   // Peripherals //
@@ -340,27 +436,18 @@ module occamy_top
   );
 
 
-  /////////
-  // SPM //
-  /////////
-  // TODO(zarubaf): Add a tiny bit of SPM
-
   ///////////////
   //   CLINT   //
   ///////////////
   clint #(
-    .AXI_ADDR_WIDTH (${soc_periph_xbar.out_clint.aw}),
-    .AXI_DATA_WIDTH (${soc_periph_xbar.out_clint.dw}),
-    .AXI_ID_WIDTH (0),
-    .NR_CORES (1),
-    .axi_req_t (${soc_periph_xbar.out_clint.req_type()}),
-    .axi_resp_t (${soc_periph_xbar.out_clint.rsp_type()})
+    .reg_req_t ( ${soc_regbus_periph_xbar.out_clint.req_type()} ),
+    .reg_rsp_t ( ${soc_regbus_periph_xbar.out_clint.rsp_type()} )
   ) i_clint (
-    .clk_i (${soc_periph_xbar.out_clint.clk}),
-    .rst_ni (${soc_periph_xbar.out_clint.rst}),
+    .clk_i (${soc_regbus_periph_xbar.out_clint.clk}),
+    .rst_ni (${soc_regbus_periph_xbar.out_clint.rst}),
     .testmode_i (1'b0),
-    .axi_req_i (${soc_periph_xbar.out_clint.req_name()}),
-    .axi_resp_o (${soc_periph_xbar.out_clint.rsp_name()}),
+    .reg_req_i (${soc_regbus_periph_xbar.out_clint.req_name()}),
+    .reg_rsp_o (${soc_regbus_periph_xbar.out_clint.rsp_name()}),
     .rtc_i (rtc_i),
     .timer_irq_o (mtip),
     .ipi_o (msip)
@@ -369,7 +456,7 @@ module occamy_top
   /////////////////////
   //   SOC CONTROL   //
   /////////////////////
-  occamy_soc_reg_top #(
+  occamy_soc_ctrl #(
     .reg_req_t ( ${soc_regbus_periph_xbar.out_soc_ctrl.req_type()} ),
     .reg_rsp_t ( ${soc_regbus_periph_xbar.out_soc_ctrl.rsp_type()} )
   ) i_soc_ctrl (
@@ -377,10 +464,19 @@ module occamy_top
     .rst_ni    ( rst_ni ),
     .reg_req_i ( ${soc_regbus_periph_xbar.out_soc_ctrl.req_name()} ),
     .reg_rsp_o ( ${soc_regbus_periph_xbar.out_soc_ctrl.rsp_name()} ),
-    .reg2hw    ( soc_ctrl_in ),
-    .hw2reg    ( soc_ctrl_out ),
-    .devmode_i ( 1'b1 )
+    .reg2hw_o  ( soc_ctrl_out ),
+    .hw2reg_i  ( soc_ctrl_in ),
+    .event_ecc_rerror_i (spm_rerror),
+    .intr_ecc_uncorrectable_o (irq.ecc_uncorrectable),
+    .intr_ecc_correctable_o (irq.ecc_correctable)
   );
+
+  //////////////////////
+  //   CHIP CONTROL   //
+  //////////////////////
+  // Contains NDA and chip specific information.
+  assign chip_ctrl_req_o = ${soc_regbus_periph_xbar.out_chip_ctrl.req_name()};
+  assign ${soc_regbus_periph_xbar.out_chip_ctrl.rsp_name()} = chip_ctrl_rsp_i;
 
   //////////////
   //   UART   //
@@ -438,6 +534,8 @@ module occamy_top
     .irq_id_o (),
     .msip_o ()
   );
+
+  assign irq.zero = 1'b0;
 
   //////////////////
   //   SPI Host   //

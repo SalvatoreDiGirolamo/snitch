@@ -17,18 +17,23 @@ dependencies:
   lowrisc_gpio: {path: ../../vendor/lowrisc_opentitan/gpio}
   lowrisc_spi_host: {path: ../../vendor/lowrisc_opentitan/spi_host}
   lowrisc_i2c: {path: ../../vendor/lowrisc_opentitan/i2c}
-  clint: {path: ../../vendor/pulp_platform_clint}
   test: {path: ../../ip/test}
+  apb: {path: ../../vendor/pulp_platform_apb}
 
 sources:
 # Level 0:
 - src/occamy_cluster_wrapper.sv
-- src/occamy_soc_reg/occamy_soc_reg_pkg.sv
-- src/occamy_soc_reg/occamy_soc_reg_top.sv
+- src/occamy_soc_ctrl/occamy_soc_reg_pkg.sv
+- src/occamy_soc_ctrl/occamy_soc_reg_top.sv
 - src/rv_plic/rv_plic_reg_pkg.sv
 - src/rv_plic/rv_plic_reg_top.sv
 - src/rv_plic/rv_plic.sv
+- src/clint/clint_reg_pkg.sv
+- src/clint/clint_reg_top.sv
+- src/clint/clint.sv
+- src/reg_to_apb.sv
 # Level 1:
+- src/occamy_soc_ctrl/occamy_soc_ctrl.sv
 - src/occamy_pkg.sv
 # Level 2:
 - src/occamy_cva6.sv

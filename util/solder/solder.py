@@ -339,6 +339,26 @@ class AxiLiteStruct:
         return name
 
 
+# APB struct emission.
+class ApbStruct:
+    configs = dict()
+
+    def emit(aw, dw):
+        global code_package
+        key = (aw, dw)
+        if key in ApbStruct.configs:
+            return ApbStruct.configs[key]
+        name = "apb_a{}_d{}".format(*key)
+        code = "// APB bus with {} bit address, {} bit data.\n".format(*key)
+        code += "`APB_TYPEDEF_REQ_T({}_req_t, logic [{}:0], logic [{}:0], logic [{}:0])\n".format(
+            name, aw - 1, dw - 1, (dw + 7) // 8 - 1)
+        code += "`APB_TYPEDEF_RESP_T({}_rsp_t, logic [{}:0])\n".format(
+            name, dw - 1)
+        code_package += "\n\n" + code
+        ApbStruct.configs[key] = name
+        return name
+
+
 # Register bus struct emission
 class RegStruct:
     configs = dict()
@@ -397,21 +417,17 @@ class AxiBus(object):
 
     def emit_flat_master_port(self, name=None):
         tpl = templates.get_template("solder.axi_flatten_port.sv.tpl")
-        return tpl.render_unicode(
-                mst_dir="output",
-                slv_dir="input",
-                prefix="m_axi_{}".format(name or ""),
-                bus=self
-            )
+        return tpl.render_unicode(mst_dir="output",
+                                  slv_dir="input",
+                                  prefix="m_axi_{}".format(name or ""),
+                                  bus=self)
 
     def emit_flat_slave_port(self, name=None):
         tpl = templates.get_template("solder.axi_flatten_port.sv.tpl")
-        return tpl.render_unicode(
-                mst_dir="input",
-                slv_dir="output",
-                prefix="s_axi_{}".format(name or ""),
-                bus=self
-            )
+        return tpl.render_unicode(mst_dir="input",
+                                  slv_dir="output",
+                                  prefix="s_axi_{}".format(name or ""),
+                                  bus=self)
 
     def declare(self, context):
         if self.declared:
@@ -474,6 +490,37 @@ class AxiBus(object):
         # Emit the remapper instance.
         bus.declare(context)
         tpl = templates.get_template("solder.axi_change_iw.sv.tpl")
+        context.write(
+            tpl.render_unicode(
+                axi_in=self,
+                axi_out=bus,
+                name=inst_name or "i_{}".format(name),
+            ) + "\n")
+        return bus
+
+    def serialize(self, context, name, inst_name=None, to=None):
+        # Generate the new bus.
+        if to is None:
+            bus = copy(self)
+            bus.declared = False
+            bus.iw = self.iw
+            bus.type_prefix = bus.emit_struct()
+            bus.name = name
+            bus.name_suffix = None
+        else:
+            bus = to
+
+        # Check bus properties.
+        assert (bus.clk == self.clk)
+        assert (bus.rst == self.rst)
+        assert (bus.aw == self.aw)
+        assert (bus.dw == self.dw)
+        assert (bus.iw == self.iw)
+        assert (bus.uw == self.uw)
+
+        # Emit the remapper instance.
+        bus.declare(context)
+        tpl = templates.get_template("solder.axi_serialize.sv.tpl")
         context.write(
             tpl.render_unicode(
                 axi_in=self,
@@ -634,7 +681,12 @@ class AxiBus(object):
                                num_pending=num_pending) + "\n")
         return bus
 
-    def atomic_adapter(self, context, max_trans=1, name=None, inst_name=None, to=None):
+    def atomic_adapter(self,
+                       context,
+                       max_trans=1,
+                       name=None,
+                       inst_name=None,
+                       to=None):
 
         name = name or "{}_atomic_adapter".format(self.name)
 
@@ -877,6 +929,73 @@ class AxiLiteBus(object):
         return bus
 
 
+# An advanced peripheral bus.
+class ApbBus(object):
+    def __init__(self,
+                 clk,
+                 rst,
+                 aw,
+                 dw,
+                 name,
+                 name_suffix=None,
+                 type_prefix=None,
+                 declared=False):
+        self.clk = clk
+        self.rst = rst
+        self.aw = aw
+        self.dw = dw
+        self.type_prefix = type_prefix or self.emit_struct()
+        self.name = name
+        self.name_suffix = name_suffix
+        self.declared = declared
+
+    def emit_struct(self):
+        return ApbStruct.emit(self.aw, self.dw)
+
+    def emit_flat_master_port(self, name=None):
+        tpl = templates.get_template("solder.apb_flatten_port.sv.tpl")
+        return tpl.render_unicode(mst_dir="output",
+                                  slv_dir="input",
+                                  prefix="m_apb_{}".format(name or ""),
+                                  bus=self)
+
+    def emit_flat_slave_port(self, name=None):
+        tpl = templates.get_template("solder.apb_flatten_port.sv.tpl")
+        return tpl.render_unicode(mst_dir="input",
+                                  slv_dir="output",
+                                  prefix="s_apb_{}".format(name or ""),
+                                  bus=self)
+
+    def declare(self, context):
+        if self.declared:
+            return
+        context.write("  {} {};\n".format(self.req_type(), self.req_name()))
+        context.write("  {} {};\n\n".format(self.rsp_type(), self.rsp_name()))
+        self.declared = True
+        return self
+
+    def req_name(self):
+        return "{}_req{}".format(self.name, self.name_suffix or "")
+
+    def rsp_name(self):
+        return "{}_rsp{}".format(self.name, self.name_suffix or "")
+
+    def req_type(self):
+        return "{}_req_t".format(self.type_prefix)
+
+    def rsp_type(self):
+        return "{}_rsp_t".format(self.type_prefix)
+
+    def addr_type(self):
+        return "logic [{}:0]".format(self.aw - 1)
+
+    def data_type(self):
+        return "logic [{}:0]".format(self.dw - 1)
+
+    def strb_type(self):
+        return "logic [{}:0]".format((self.dw + 7) // 8 - 1)
+
+
 # A register bus.
 class RegBus(object):
     def __init__(self,
@@ -953,6 +1072,30 @@ class RegBus(object):
             ) + "\n")
         return bus
 
+    def to_apb(self, context, name, inst_name=None, to=None):
+        # Generate the new bus.
+        if to is None:
+            bus = ApbBus(self.clk, self.rst, self.aw, self.dw, name=name)
+        else:
+            bus = to
+
+        # Check bus properties.
+        assert (bus.clk == self.clk)
+        assert (bus.rst == self.rst)
+        assert (bus.aw == self.aw)
+        assert (bus.dw == self.dw)
+
+        # Emit the converter instance.
+        bus.declare(context)
+        tpl = templates.get_template("solder.reg_to_apb.sv.tpl")
+        context.write(
+            tpl.render_unicode(
+                bus_in=self,
+                bus_out=bus,
+                name=inst_name or "i_{}_pc".format(name),
+            ) + "\n")
+        return bus
+
 
 # A crossbar.
 class Xbar(object):
@@ -980,7 +1123,14 @@ class Xbar(object):
 class AxiXbar(Xbar):
     configs = dict()
 
-    def __init__(self, aw, dw, iw, uw=0, no_loopback=False, **kwargs):
+    def __init__(self,
+                 aw,
+                 dw,
+                 iw,
+                 uw=0,
+                 no_loopback=False,
+                 atop_support=True,
+                 **kwargs):
         super().__init__(**kwargs)
         self.aw = aw
         self.dw = dw
@@ -988,6 +1138,7 @@ class AxiXbar(Xbar):
         self.uw = uw
         self.no_loopback = no_loopback
         self.symbolic_addrmap = list()
+        self.atop_support = atop_support
         self.addrmap = list()
 
     def add_input(self, name):
@@ -1172,6 +1323,7 @@ class AxiXbar(Xbar):
         code += "  .Cfg           ( {cfg_name} ),\n".format(
             cfg_name=self.cfg_name)
         code += "  .Connectivity  ( {} ), \n".format(self.connectivity())
+        code += "  .AtopSupport   ( {} ), \n".format(int(self.atop_support))
         code += "  .slv_aw_chan_t ( {}_aw_chan_t ),\n".format(
             self.input_struct)
         code += "  .mst_aw_chan_t ( {}_aw_chan_t ),\n".format(

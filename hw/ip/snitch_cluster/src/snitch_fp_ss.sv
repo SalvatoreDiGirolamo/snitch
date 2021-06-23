@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: SHL-0.51
 
 `include "common_cells/registers.svh"
+`include "common_cells/assertions.svh"
 
 // Floating Point Subsystem
 module snitch_fp_ss import snitch_pkg::*; #(
@@ -2640,8 +2641,8 @@ module snitch_fp_ss import snitch_pkg::*; #(
     .clk_i (clk_i),
     .rst_i (rst_i),
     .lsu_qtag_i (rd),
-    .lsu_qwrite (is_store),
-    .lsu_qsigned (1'b1), // all floating point loads are signed
+    .lsu_qwrite_i (is_store),
+    .lsu_qsigned_i (1'b1), // all floating point loads are signed
     .lsu_qaddr_i (acc_req_q.data_argc[AddrWidth-1:0]),
     .lsu_qdata_i (op[1]),
     .lsu_qsize_i (ls_size),
@@ -2711,5 +2712,8 @@ module snitch_fp_ss import snitch_pkg::*; #(
   assign trace_port_o.fpr_waddr    = fpr_waddr[0];
   assign trace_port_o.fpr_wdata    = fpr_wdata[0];
   assign trace_port_o.fpr_we       = fpr_we[0];
-// pragma translate_on
+  // pragma translate_on
+
+  /// Assertions
+  `ASSERT(RegWriteKnown, fpr_we |-> !$isunknown(fpr_wdata), clk_i, rst_i)
 endmodule

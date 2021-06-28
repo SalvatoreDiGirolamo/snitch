@@ -92,9 +92,11 @@ module virtual_stdout_demux #(
     end
 
     // Assertions
+    `ifndef VERILATOR
     assert property(
       @(posedge clk_i) (resp_inj_q |-> core_req_i.p_ready))
         else $fatal (1, "Core is not ready to receive response!");
+    `endif
 
   `endif
 endmodule

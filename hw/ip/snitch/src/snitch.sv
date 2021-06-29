@@ -2344,6 +2344,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           // lp.starti: set start address to PC + I-type immediate
           hwloop_we[0]           = 1'b1;
           hwloop_start_mux_sel   = 1'b0;
+          write_rd               = 1'b0;
         end else begin
           illegal_inst = 1'b1;
         end   
@@ -2352,6 +2353,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
         if (Xhwlp) begin
           // lp.endi: set end address to PC + I-type immediate
           hwloop_we[1]           = 1'b1;
+          write_rd               = 1'b0;
         end else begin
           illegal_inst = 1'b1;
         end     
@@ -2361,7 +2363,8 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           // lp.count: initialize counter from rs1
           hwloop_we[2]         = 1'b1;
           hwloop_cnt_mux_sel   = 1'b1;
-          opa_select = Reg;
+          opa_select           = Reg;
+          write_rd             = 1'b0;
         end else begin
           illegal_inst = 1'b1;
         end  
@@ -2371,6 +2374,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           // lp.counti: initialize counter from I-type immediate
           hwloop_we[2]         = 1'b1;
           hwloop_cnt_mux_sel   = 1'b0;
+          write_rd             = 1'b0;
         end else begin
           illegal_inst = 1'b1;
         end  
@@ -2383,6 +2387,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
             hwloop_start_mux_sel   = 1'b1;
             hwloop_cnt_mux_sel     = 1'b1;
             opa_select             = Reg;
+            write_rd               = 1'b0;
         end else begin
           illegal_inst = 1'b1;
         end  
@@ -2395,6 +2400,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           hwloop_start_mux_sel    = 1'b1;
           hwloop_target_mux_sel   = 1'b1;
           hwloop_cnt_mux_sel      = 1'b0;
+          write_rd                = 1'b0;
         end else begin
           illegal_inst = 1'b1;
         end  
@@ -3153,6 +3159,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
       (inst_valid_o && inst_ready_i && inst_cacheable_o) ##1 (inst_valid_o && $stable(inst_addr_o))
       |-> inst_ready_i && $stable(inst_data_i), clk_i, rst_i)
 
-  `ASSERT(RegWriteKnown, gpr_we |-> !$isunknown(gpr_wdata), clk_i, rst_i)
-
+  for (genvar i=0; i<RegNrWritePorts; i++) begin : gen_reg_write_known_assert
+    `ASSERT(RegWriteKnown, gpr_we[i] |-> !$isunknown(gpr_wdata[i]), clk_i, rst_i)
+  end
 endmodule

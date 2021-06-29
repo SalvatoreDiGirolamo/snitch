@@ -237,6 +237,7 @@ module axi_dma_tc_snitch_fe #(
 
         // decode
         if (acc_qvalid_i == 1'b1) begin
+          /*
           unique casez (acc_qdata_op_i)
 
               // manipulate the source register
@@ -345,6 +346,7 @@ module axi_dma_tc_snitch_fe #(
 
               default:;
           endcase
+          */
         end
     end
 

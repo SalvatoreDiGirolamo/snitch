@@ -1911,6 +1911,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
         end
       end
       // DMA instructions
+      /*
       DMSRC,
       DMDST,
       DMSTR: begin
@@ -1982,6 +1983,7 @@ module snitch import snitch_pkg::*; import riscv_instr::*; #(
           illegal_inst = 1'b1;
         end
       end
+      */
       SCFGRI: begin
         if (Xssr) begin
           acc_qreq_o.addr = SSR_CFG;

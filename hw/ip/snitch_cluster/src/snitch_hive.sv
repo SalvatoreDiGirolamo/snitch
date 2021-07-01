@@ -21,6 +21,7 @@ module snitch_hive #(
   parameter int unsigned AddrWidth          = 0,
   /// Data width of the buses.
   parameter int unsigned DataWidth          = 0,
+  parameter int unsigned ServiceDataWidth   = 0,
   parameter type         dreq_t             = logic,
   parameter type         drsp_t             = logic,
   parameter type         axi_req_t          = logic,
@@ -85,7 +86,7 @@ module snitch_hive #(
     .FETCH_AW          ( AddrWidth        ),
     .FETCH_DW          ( 32               ),
     .FILL_AW           ( AddrWidth        ),
-    .FILL_DW           ( DataWidth        ),
+    .FILL_DW           ( ServiceDataWidth ),
     .EARLY_LATCH        ( 0               ),
     .L0_EARLY_TAG_WIDTH ( snitch_pkg::PAGE_SHIFT - $clog2(ICacheLineWidth/8) ),
     .ISO_CROSSING       ( IsoCrossing     ),
@@ -165,7 +166,7 @@ module snitch_hive #(
 
   snitch_ptw #(
     .AddrWidth (AddrWidth),
-    .DataWidth (DataWidth),
+    .DataWidth (ServiceDataWidth),
     .pa_t (pa_t),
     .l0_pte_t (l0_pte_t),
     .pte_sv32_t (pte_sv32_t),
@@ -186,7 +187,7 @@ module snitch_hive #(
 
   reqrsp_iso #(
     .AddrWidth (AddrWidth),
-    .DataWidth (DataWidth),
+    .DataWidth (ServiceDataWidth),
     .req_t (dreq_t),
     .rsp_t (drsp_t),
     .BypassReq (1'b0),

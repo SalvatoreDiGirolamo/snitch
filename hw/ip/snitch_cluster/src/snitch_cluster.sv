@@ -29,9 +29,11 @@ module snitch_cluster
   parameter int unsigned NarrowDataWidth    = 64,
   /// Width of wide AXI port.
   parameter int unsigned WideDataWidth      = 512,
+  /// Width of service AXI port.
+  parameter int unsigned ServiceDataWidth   = 128,
   /// AXI: id width in.
   parameter int unsigned NarrowIdWidthIn    = 2,
-  /// AXI: dma id with in *currently not available*
+  /// AXI: dma id width in *currently not available*
   parameter int unsigned WideIdWidthIn      = 2,
   /// AXI: user width.
   parameter int unsigned UserWidth          = 1,
@@ -130,6 +132,8 @@ module snitch_cluster
   parameter bit          RegisterExtWide    = 1'b0,
   /// Decouple narrow external AXI plug
   parameter bit          RegisterExtNarrow  = 1'b0,
+  /// Decouple service external AXI plug
+  parameter bit          RegisterExtService = 1'b0;
   /// Insert Pipeline register into the FPU data path (request)
   parameter bit          RegisterFPUReq     = 1'b0,
   /// Insert Pipeline registers after sequencer
@@ -140,14 +144,16 @@ module snitch_cluster
   parameter axi_pkg::xbar_latency_e WideXbarLatency = axi_pkg::CUT_ALL_PORTS,
   /// # Interface
   /// AXI Ports
-  parameter type         narrow_in_req_t   = logic,
-  parameter type         narrow_in_resp_t  = logic,
-  parameter type         narrow_out_req_t  = logic,
-  parameter type         narrow_out_resp_t = logic,
-  parameter type         wide_out_req_t    = logic,
-  parameter type         wide_out_resp_t   = logic,
-  parameter type         wide_in_req_t     = logic,
-  parameter type         wide_in_resp_t    = logic,
+  parameter type         narrow_in_req_t    = logic,
+  parameter type         narrow_in_resp_t   = logic,
+  parameter type         narrow_out_req_t   = logic,
+  parameter type         narrow_out_resp_t  = logic,
+  parameter type         wide_out_req_t     = logic,
+  parameter type         wide_out_resp_t    = logic,
+  parameter type         wide_in_req_t      = logic,
+  parameter type         wide_in_resp_t     = logic,
+  parameter type         service_out_req_t  = logic,
+  parameter type         service_out_resp_t = logic,
   /// # PsPIN
   // Total number of HERs per cluster (in execution + buffered)
   parameter int unsigned HERCount = 4,
@@ -222,6 +228,9 @@ module snitch_cluster
   /// AXI DMA cluster in-port.
   input  wide_in_req_t                  wide_in_req_i,
   output wide_in_resp_t                 wide_in_resp_o,
+  /// AXI Service cluster out-port (used by PTW and ICACHEs).
+  output service_out_req_t              service_out_req_o,
+  input  service_out_resp_t             service_out_resp_i,
   /// Task from scheduler
   input  logic                          task_valid_i,
   output logic                          task_ready_o,
@@ -269,9 +278,13 @@ module snitch_cluster
   localparam logic [PhysicalAddrWidth-1:0] TCDMMask = ~(TCDMSize-1);
   localparam logic [PhysicalAddrWidth-1:0] HPUDriverMemMask = ~(HPUDriverMemSize-1);
 
-  // Core Requests, SoC Request, PTW, `n` instruction caches.
-  localparam int unsigned NrMasters = 3 + NrHives;
+  // Core Requests, SoC Request, 
+  localparam int unsigned NrMasters = 2;
   localparam int unsigned IdWidthOut = $clog2(NrMasters) + NarrowIdWidthIn;
+  
+  // PTW, `n` instruction caches.
+  localparam int unsigned NrServiceMasters = 1 + NrHives;
+  localparam int unsigned ServiceIdWidthOut = $clog2(NrServiceMasters);
 
   localparam int unsigned NrSlaves = 3;
   localparam int unsigned NrRules = NrSlaves - 1;
@@ -329,18 +342,23 @@ module snitch_cluster
   // --------
   // Typedefs
   // --------
-  typedef logic [PhysicalAddrWidth-1:0] addr_t;
-  typedef logic [NarrowDataWidth-1:0]   data_t;
-  typedef logic [NarrowDataWidth/8-1:0] strb_t;
-  typedef logic [WideDataWidth-1:0]     data_dma_t;
-  typedef logic [WideDataWidth/8-1:0]   strb_dma_t;
-  typedef logic [NarrowIdWidthIn-1:0]   id_mst_t;
-  typedef logic [IdWidthOut-1:0]        id_slv_t;
-  typedef logic [WideIdWidthIn-1:0]     id_dma_mst_t;
-  typedef logic [IdWidthDMAOut-1:0]     id_dma_slv_t;
-  typedef logic [UserWidth-1:0]         user_t;
+  typedef logic [PhysicalAddrWidth-1:0]  addr_t;
+  typedef logic [NarrowDataWidth-1:0]    data_t;
+  typedef logic [NarrowDataWidth/8-1:0]  strb_t;
+  typedef logic [WideDataWidth-1:0]      data_dma_t;
+  typedef logic [WideDataWidth/8-1:0]    strb_dma_t;
+  typedef logic [ServiceDataWidth-1:0]   data_service_t;
+  typedef logic [ServiceDataWidth/8-1:0] strb_service_t;
+  typedef logic [NarrowIdWidthIn-1:0]    id_mst_t;
+  typedef logic [IdWidthOut-1:0]         id_slv_t;
+  typedef logic [WideIdWidthIn-1:0]      id_dma_mst_t;
+  typedef logic [IdWidthDMAOut-1:0]      id_dma_slv_t;
+  typedef logic [ServiceIdWidthOut-1:0]  id_service_mst_t;
+  typedef logic [UserWidth-1:0]          user_t;
 
-  typedef logic [TCDMAddrWidth-1:0]     tcdm_addr_t;
+
+
+  typedef logic [TCDMAddrWidth-1:0]      tcdm_addr_t;
 
   typedef struct packed {
     logic [CoreIDWidth-1:0] core_id;
@@ -363,7 +381,12 @@ module snitch_cluster
   `AXI_TYPEDEF_ALL(axi_mst_dma, addr_t, id_dma_mst_t, data_dma_t, strb_dma_t, user_t)
   `AXI_TYPEDEF_ALL(axi_slv_dma, addr_t, id_dma_slv_t, data_dma_t, strb_dma_t, user_t)
 
+  // [Salvo] the axi_mst_service could have ID width 1 since they are used by single masters and mux'd in a axi_slv_service?
+  `AXI_TYPEDEF_ALL(axi_mst_service, addr_t, id_service_mst_t, data_service_t, strb_service_t, user_t)
+  `AXI_TYPEDEF_ALL(axi_slv_service, addr_t, id_service_mst_t, data_service_t, strb_service_t, user_t)
+
   `REQRSP_TYPEDEF_ALL(reqrsp, addr_t, data_t, strb_t)
+  `REQRSP_TYPEDEF_ALL(service_reqrsp, addr_t, data_service_t, strb_service_t)
 
   `MEM_TYPEDEF_ALL(mem, tcdm_addr_t, data_t, strb_t, tcdm_user_t)
   `MEM_TYPEDEF_ALL(mem_dma, tcdm_addr_t, data_dma_t, strb_dma_t, logic)
@@ -455,6 +478,12 @@ module snitch_cluster
   axi_mst_req_t  [NrMasters-1:0] master_req;
   axi_mst_resp_t [NrMasters-1:0] master_resp;
 
+  axi_mst_service_req_t  [NrServiceMasters-1:0] master_service_req;
+  axi_mst_service_resp_t [NrServiceMasters-1:0] master_service_resp;
+
+  axi_slv_service_req_t  slave_service_req;
+  axi_slv_service_resp_t slave_service_resp;
+
   // DMA AXI buses
   axi_mst_dma_req_t  [NrDmaMasters-1:0] axi_dma_mst_req;
   axi_mst_dma_resp_t [NrDmaMasters-1:0] axi_dma_mst_res;
@@ -485,8 +514,8 @@ module snitch_cluster
   // 4. Memory Subsystem (Core side).
   reqrsp_req_t [NrCores-1:0] core_req, filtered_core_req;
   reqrsp_rsp_t [NrCores-1:0] core_rsp, filtered_core_rsp;
-  reqrsp_req_t [NrHives-1:0] ptw_req;
-  reqrsp_rsp_t [NrHives-1:0] ptw_rsp;
+  service_reqrsp_req_t [NrHives-1:0] ptw_req;
+  service_reqrsp_rsp_t [NrHives-1:0] ptw_rsp;
 
   // 5. Peripheral Subsystem
   reg_req_t reg_req;
@@ -961,8 +990,9 @@ module snitch_cluster
     snitch_hive #(
       .AddrWidth (PhysicalAddrWidth),
       .DataWidth (NarrowDataWidth),
-      .dreq_t (reqrsp_req_t),
-      .drsp_t (reqrsp_rsp_t),
+      .ServiceDataWidth (ServiceDataWidth),
+      .dreq_t (service_reqrsp_req_t),
+      .drsp_t (service_reqrsp_rsp_t),
       .hive_req_t (hive_req_t),
       .hive_rsp_t (hive_rsp_t),
       .CoreCount (HiveSize),
@@ -970,8 +1000,8 @@ module snitch_cluster
       .ICacheLineCount (ICacheLineCount[i]),
       .ICacheSets (ICacheSets[i]),
       .IsoCrossing (IsoCrossing),
-      .axi_req_t (axi_mst_req_t),
-      .axi_rsp_t (axi_mst_resp_t)
+      .axi_req_t (axi_mst_service_req_t),
+      .axi_rsp_t (axi_mst_service_resp_t)
     ) i_snitch_hive (
       .clk_i,
       .clk_d2_i (clk_d2),
@@ -980,8 +1010,8 @@ module snitch_cluster
       .hive_rsp_o (hive_rsp_reshape),
       .ptw_data_req_o (ptw_req[i]),
       .ptw_data_rsp_i (ptw_rsp[i]),
-      .axi_req_o (master_req[ICache+i]),
-      .axi_rsp_i (master_resp[ICache+i])
+      .axi_req_o (master_service_req[ICache+i]),
+      .axi_rsp_i (master_service_resp[ICache+i])
     );
   end
 
@@ -1085,15 +1115,15 @@ module snitch_cluster
   // --------
   // PTW Demux
   // --------
-  reqrsp_req_t ptw_to_axi_req;
-  reqrsp_rsp_t ptw_to_axi_rsp;
+  service_reqrsp_req_t ptw_to_axi_req;
+  service_reqrsp_rsp_t ptw_to_axi_rsp;
 
   reqrsp_mux #(
     .NrPorts (NrHives),
     .AddrWidth (PhysicalAddrWidth),
-    .DataWidth (NarrowDataWidth),
-    .req_t (reqrsp_req_t),
-    .rsp_t (reqrsp_rsp_t),
+    .DataWidth (ServiceDataWidth),
+    .req_t (service_reqrsp_req_t),
+    .rsp_t (service_reqrsp_rsp_t),
     .RespDepth (2)
   ) i_reqrsp_mux_ptw (
     .clk_i,
@@ -1105,18 +1135,18 @@ module snitch_cluster
   );
 
   reqrsp_to_axi #(
-    .DataWidth (NarrowDataWidth),
-    .reqrsp_req_t (reqrsp_req_t),
-    .reqrsp_rsp_t (reqrsp_rsp_t),
-    .axi_req_t (axi_mst_req_t),
-    .axi_rsp_t (axi_mst_resp_t)
+    .DataWidth (ServiceDataWidth),
+    .reqrsp_req_t (service_reqrsp_req_t),
+    .reqrsp_rsp_t (service_reqrsp_rsp_t),
+    .axi_req_t (axi_mst_service_req_t),
+    .axi_rsp_t (axi_mst_service_resp_t)
   ) i_reqrsp_to_axi_ptw (
     .clk_i,
     .rst_ni,
     .reqrsp_req_i (ptw_to_axi_req),
     .reqrsp_rsp_o (ptw_to_axi_rsp),
-    .axi_req_o (master_req[PTW]),
-    .axi_rsp_i (master_resp[PTW])
+    .axi_req_o (master_service_req[PTW]),
+    .axi_rsp_i (master_service_resp[PTW])
   );
 
   // --------
@@ -1321,6 +1351,59 @@ module snitch_cluster
     .slv_resp_o ( slave_resp[SoC] ),
     .mst_req_o  ( narrow_out_req_o   ),
     .mst_resp_i ( narrow_out_resp_i   )
+  );
+
+  // Multiplex master service ports (PTW, Icaches) to a slave one
+  axi_mux #(
+    .SlvAxiIDWidth ( ServiceIdWidthOut             ),
+    .slv_aw_chan_t ( axi_slv_service_aw_t          ),
+    .mst_aw_chan_t ( axi_mst_service_aw_t          ),
+    .w_chan_t      ( axi_mst_service_w_t           ),
+    .slv_b_chan_t  ( axi_slv_service_b_t           ),
+    .mst_b_chan_t  ( axi_mst_service_b_t           ),
+    .slv_ar_chan_t ( axi_slv_service_ar_t          ),
+    .mst_ar_chan_t ( axi_mst_service_ar_t          ),
+    .slv_r_chan_t  ( axi_slv_service_r_t           ),
+    .mst_r_chan_t  ( axi_mst_service_r_t           ),
+    .slv_req_t     ( axi_slv_service_req_t         ),
+    .slv_resp_t    ( axi_slv_service_resp_t        ),
+    .mst_req_t     ( axi_mst_service_req_t         ),
+    .mst_resp_t    ( axi_mst_service_resp_t        ),
+    .NoSlvPorts    ( NrServiceMasters              ),
+    .MaxWTrans     ( ClusterXbarCfg.MaxSlvTrans    ),
+    .FallThrough   ( ClusterXbarCfg.FallThrough    ),
+    .SpillAw       ( ClusterXbarCfg.LatencyMode[4] ),
+    .SpillW        ( ClusterXbarCfg.LatencyMode[3] ),
+    .SpillB        ( ClusterXbarCfg.LatencyMode[2] ),
+    .SpillAr       ( ClusterXbarCfg.LatencyMode[1] ),
+    .SpillR        ( ClusterXbarCfg.LatencyMode[0] )
+  ) i_axi_service_mux (
+    .clk_i,
+    .rst_ni,
+    .test_i      ( 1'b0                   ),
+    .slv_reqs_i  ( master_service_req[i]  ),
+    .slv_resps_o ( master_service_resp[i] ),
+    .mst_req_o   ( slave_service_req      ),
+    .mst_resp_i  ( slave_service_resp     )
+  );
+
+  // Optionally decouple the external service AXI slave port.
+  axi_cut #(
+    .Bypass (!RegisterExtService),
+    .aw_chan_t (axi_slv_service_aw_t),
+    .w_chan_t (axi_slv_service_w_t),
+    .b_chan_t (axi_slv_service_b_t),
+    .ar_chan_t (axi_slv_service_ar_t),
+    .r_chan_t (axi_slv_service_r_t),
+    .req_t (axi_slv_service_req_t),
+    .resp_t (axi_slv_service_resp_t)
+  ) i_cut_ext_service_mst (
+    .clk_i,
+    .rst_ni,
+    .slv_req_i  ( slave_service_req  ),
+    .slv_resp_o ( slave_service_resp ),
+    .mst_req_o  ( service_out_req_o  ),
+    .mst_resp_i ( service_out_resp_i )
   );
 
   // --------------------

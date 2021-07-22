@@ -133,7 +133,7 @@ module snitch_cluster
   /// Decouple narrow external AXI plug
   parameter bit          RegisterExtNarrow  = 1'b0,
   /// Decouple service external AXI plug
-  parameter bit          RegisterExtService = 1'b0;
+  parameter bit          RegisterExtService = 1'b0,
   /// Insert Pipeline register into the FPU data path (request)
   parameter bit          RegisterFPUReq     = 1'b0,
   /// Insert Pipeline registers after sequencer
@@ -283,8 +283,9 @@ module snitch_cluster
   localparam int unsigned IdWidthOut = $clog2(NrMasters) + NarrowIdWidthIn;
   
   // PTW, `n` instruction caches.
+  localparam int unsigned ServiceIdWidthIn = 1;
   localparam int unsigned NrServiceMasters = 1 + NrHives;
-  localparam int unsigned ServiceIdWidthOut = $clog2(NrServiceMasters);
+  localparam int unsigned ServiceIdWidthOut = ServiceIdWidthIn + $clog2(NrServiceMasters);
 
   localparam int unsigned NrSlaves = 3;
   localparam int unsigned NrRules = NrSlaves - 1;
@@ -353,7 +354,8 @@ module snitch_cluster
   typedef logic [IdWidthOut-1:0]         id_slv_t;
   typedef logic [WideIdWidthIn-1:0]      id_dma_mst_t;
   typedef logic [IdWidthDMAOut-1:0]      id_dma_slv_t;
-  typedef logic [ServiceIdWidthOut-1:0]  id_service_mst_t;
+  typedef logic [ServiceIdWidthIn-1:0]   id_service_mst_t;
+  typedef logic [ServiceIdWidthOut-1:0]  id_service_slv_t;
   typedef logic [UserWidth-1:0]          user_t;
 
 
@@ -383,7 +385,7 @@ module snitch_cluster
 
   // [Salvo] the axi_mst_service could have ID width 1 since they are used by single masters and mux'd in a axi_slv_service?
   `AXI_TYPEDEF_ALL(axi_mst_service, addr_t, id_service_mst_t, data_service_t, strb_service_t, user_t)
-  `AXI_TYPEDEF_ALL(axi_slv_service, addr_t, id_service_mst_t, data_service_t, strb_service_t, user_t)
+  `AXI_TYPEDEF_ALL(axi_slv_service, addr_t, id_service_slv_t, data_service_t, strb_service_t, user_t)
 
   `REQRSP_TYPEDEF_ALL(reqrsp, addr_t, data_t, strb_t)
   `REQRSP_TYPEDEF_ALL(service_reqrsp, addr_t, data_service_t, strb_service_t)
@@ -1355,34 +1357,34 @@ module snitch_cluster
 
   // Multiplex master service ports (PTW, Icaches) to a slave one
   axi_mux #(
-    .SlvAxiIDWidth ( ServiceIdWidthOut             ),
-    .slv_aw_chan_t ( axi_slv_service_aw_t          ),
-    .mst_aw_chan_t ( axi_mst_service_aw_t          ),
-    .w_chan_t      ( axi_mst_service_w_t           ),
-    .slv_b_chan_t  ( axi_slv_service_b_t           ),
-    .mst_b_chan_t  ( axi_mst_service_b_t           ),
-    .slv_ar_chan_t ( axi_slv_service_ar_t          ),
-    .mst_ar_chan_t ( axi_mst_service_ar_t          ),
-    .slv_r_chan_t  ( axi_slv_service_r_t           ),
-    .mst_r_chan_t  ( axi_mst_service_r_t           ),
-    .slv_req_t     ( axi_slv_service_req_t         ),
-    .slv_resp_t    ( axi_slv_service_resp_t        ),
-    .mst_req_t     ( axi_mst_service_req_t         ),
-    .mst_resp_t    ( axi_mst_service_resp_t        ),
-    .NoSlvPorts    ( NrServiceMasters              ),
-    .MaxWTrans     ( ClusterXbarCfg.MaxSlvTrans    ),
-    .FallThrough   ( ClusterXbarCfg.FallThrough    ),
-    .SpillAw       ( ClusterXbarCfg.LatencyMode[4] ),
-    .SpillW        ( ClusterXbarCfg.LatencyMode[3] ),
-    .SpillB        ( ClusterXbarCfg.LatencyMode[2] ),
-    .SpillAr       ( ClusterXbarCfg.LatencyMode[1] ),
-    .SpillR        ( ClusterXbarCfg.LatencyMode[0] )
+    .SlvAxiIDWidth ( ServiceIdWidthIn                   ),
+    .slv_aw_chan_t ( axi_mst_service_aw_chan_t          ),
+    .mst_aw_chan_t ( axi_slv_service_aw_chan_t          ),
+    .w_chan_t      ( axi_slv_service_w_chan_t           ),
+    .slv_b_chan_t  ( axi_mst_service_b_chan_t           ),
+    .mst_b_chan_t  ( axi_slv_service_b_chan_t           ),
+    .slv_ar_chan_t ( axi_mst_service_ar_chan_t          ),
+    .mst_ar_chan_t ( axi_slv_service_ar_chan_t          ),
+    .slv_r_chan_t  ( axi_mst_service_r_chan_t           ),
+    .mst_r_chan_t  ( axi_slv_service_r_chan_t           ),
+    .slv_req_t     ( axi_mst_service_req_t              ),
+    .slv_resp_t    ( axi_mst_service_resp_t             ),
+    .mst_req_t     ( axi_slv_service_req_t              ),
+    .mst_resp_t    ( axi_slv_service_resp_t             ),
+    .NoSlvPorts    ( NrServiceMasters                   ),
+    .MaxWTrans     ( ClusterXbarCfg.MaxSlvTrans         ),
+    .FallThrough   ( ClusterXbarCfg.FallThrough         ),
+    .SpillAw       ( ClusterXbarCfg.LatencyMode[4]      ),
+    .SpillW        ( ClusterXbarCfg.LatencyMode[3]      ),
+    .SpillB        ( ClusterXbarCfg.LatencyMode[2]      ),
+    .SpillAr       ( ClusterXbarCfg.LatencyMode[1]      ),
+    .SpillR        ( ClusterXbarCfg.LatencyMode[0]      )
   ) i_axi_service_mux (
     .clk_i,
     .rst_ni,
     .test_i      ( 1'b0                   ),
-    .slv_reqs_i  ( master_service_req[i]  ),
-    .slv_resps_o ( master_service_resp[i] ),
+    .slv_reqs_i  ( master_service_req     ),
+    .slv_resps_o ( master_service_resp    ),
     .mst_req_o   ( slave_service_req      ),
     .mst_resp_i  ( slave_service_resp     )
   );
@@ -1390,11 +1392,11 @@ module snitch_cluster
   // Optionally decouple the external service AXI slave port.
   axi_cut #(
     .Bypass (!RegisterExtService),
-    .aw_chan_t (axi_slv_service_aw_t),
-    .w_chan_t (axi_slv_service_w_t),
-    .b_chan_t (axi_slv_service_b_t),
-    .ar_chan_t (axi_slv_service_ar_t),
-    .r_chan_t (axi_slv_service_r_t),
+    .aw_chan_t (axi_slv_service_aw_chan_t),
+    .w_chan_t (axi_slv_service_w_chan_t),
+    .b_chan_t (axi_slv_service_b_chan_t),
+    .ar_chan_t (axi_slv_service_ar_chan_t),
+    .r_chan_t (axi_slv_service_r_chan_t),
     .req_t (axi_slv_service_req_t),
     .resp_t (axi_slv_service_resp_t)
   ) i_cut_ext_service_mst (

@@ -814,11 +814,14 @@ module snitch_cc #(
           opa_select:   i_snitch.opa_select,
           opb_select:   i_snitch.opb_select,
           write_rd:     i_snitch.write_rd,
+          uses_rd:      i_snitch.uses_rd,
           csr_addr:     i_snitch.inst_data_i[31:20],
           // Pipeline writeback
           writeback:    i_snitch.alu_writeback,
           // Load/Store
+          gpr_rdata_0:  i_snitch.gpr_rdata[0],
           gpr_rdata_1:  i_snitch.gpr_rdata[1],
+          gpr_rdata_2:  i_snitch.gpr_rdata[2],
           ls_size:      i_snitch.ls_size,
           ld_result_32: i_snitch.ld_result[31:0],
           lsu_rd:       i_snitch.lsu_rd,
@@ -827,9 +830,12 @@ module snitch_cc #(
           // Atomics
           ls_amo:       i_snitch.ls_amo,
           // Accumulator
+          acc_qvalid:   i_snitch.acc_qvalid_o,
+          acc_qaddr:    i_snitch.acc_qreq_o.addr,
+          acc_uses_rd:  i_snitch.acc_register_rd, 
           retire_acc:   i_snitch.retire_acc,
-          acc_pid:      i_snitch.acc_qreq_o.id,
-          acc_pdata_32: i_snitch.acc_qreq_o.data_op[31:0],
+          acc_pid:      i_snitch.acc_prsp_i.id,
+          acc_pdata_32: i_snitch.acc_prsp_i.data[31:0],
           // FPU offload
           fpu_offload:
             (i_snitch.acc_qready_i && i_snitch.acc_qvalid_o && i_snitch.acc_qreq_o.addr == 0),
